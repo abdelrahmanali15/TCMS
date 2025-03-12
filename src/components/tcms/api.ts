@@ -147,10 +147,10 @@ export const createTestCase = async (testCase: Partial<TestCase>) => {
       }
     }
 
-    // Extract steps if present
-    const { steps, ...testCaseData } = testCase;
+    // Extract steps, feature, and tags from the test case
+    const { steps, feature, tags, ...testCaseData } = testCase;
 
-    // First create the test case
+    // First create the test case (without the invalid properties)
     const { data, error } = await supabase
       .from("test_cases")
       .insert([testCaseData])
@@ -173,6 +173,11 @@ export const createTestCase = async (testCase: Partial<TestCase>) => {
       if (stepsError) throw stepsError;
     }
 
+    // Handle tags if present
+    if (tags && Array.isArray(tags) && tags.length > 0) {
+      await handleTagsForTestCase(data.id, tags);
+    }
+
     return data;
   } catch (error) {
     console.error("Error creating test case:", error);
@@ -185,10 +190,10 @@ export const createTestCase = async (testCase: Partial<TestCase>) => {
  */
 export const updateTestCase = async (id: string, testCase: Partial<TestCase>) => {
   try {
-    // Extract steps if present
-    const { steps, ...testCaseData } = testCase;
+    // Extract steps, feature, and tags from the test case
+    const { steps, feature, tags, ...testCaseData } = testCase;
 
-    // First update the test case
+    // First update the test case (without the invalid properties)
     const { data, error } = await supabase
       .from("test_cases")
       .update(testCaseData)
@@ -221,12 +226,73 @@ export const updateTestCase = async (id: string, testCase: Partial<TestCase>) =>
       if (stepsError) throw stepsError;
     }
 
+    // Handle tags if present
+    if (tags && Array.isArray(tags) && tags.length > 0) {
+      await handleTagsForTestCase(id, tags);
+    }
+
     return data;
   } catch (error) {
     console.error("Error updating test case:", error);
     throw error;
   }
 };
+
+/**
+ * Helper function to manage tag associations for a test case
+ */
+async function handleTagsForTestCase(testCaseId: string, tags: Array<{name: string}>): Promise<void> {
+  try {
+    // First remove all existing tag associations
+    const { error: deleteError } = await supabase
+      .from("test_case_tags")
+      .delete()
+      .eq("test_case_id", testCaseId);
+
+    if (deleteError) throw deleteError;
+
+    // Process each tag
+    for (const tag of tags) {
+      // Check if the tag already exists
+      const { data: existingTag, error: tagError } = await supabase
+        .from("tags")
+        .select("id")
+        .eq("name", tag.name)
+        .maybeSingle();
+
+      if (tagError) throw tagError;
+
+      let tagId;
+
+      // If tag doesn't exist, create it
+      if (!existingTag) {
+        const { data: newTag, error: createError } = await supabase
+          .from("tags")
+          .insert({ name: tag.name })
+          .select("id")
+          .single();
+
+        if (createError) throw createError;
+        tagId = newTag.id;
+      } else {
+        tagId = existingTag.id;
+      }
+
+      // Create the association between test case and tag
+      const { error: linkError } = await supabase
+        .from("test_case_tags")
+        .insert({
+          test_case_id: testCaseId,
+          tag_id: tagId
+        });
+
+      if (linkError) throw linkError;
+    }
+  } catch (error) {
+    console.error("Error handling tags for test case:", error);
+    throw error;
+  }
+}
 
 // Test Steps API
 export const getTestStepsByTestCaseId = async (
@@ -652,4 +718,152 @@ export const getReleaseById = async (id: string) => {
 
   if (error) throw error;
   return data;
+};
+
+/**
+ * Get paginated test cases with optional filters
+ */
+export const getPaginatedTestCases = async (options: {
+  page: number;
+  pageSize: number;
+  testType?: string;
+  searchQuery?: string;
+  featureId?: string;
+  status?: string;
+  priority?: string;
+}): Promise<{
+  data: TestCase[];
+  hasMore: boolean;
+}> => {
+  const { page, pageSize, testType, searchQuery, featureId, status, priority } = options;
+
+  try {
+    // Build query with filters
+    let query = supabase
+      .from("test_cases")
+      .select("*, features(name)")
+      .range(page * pageSize, (page + 1) * pageSize - 1)
+      .order("created_at", { ascending: false });
+
+    // Add filters if provided
+    if (testType) {
+      query = query.eq("test_type", testType);
+    }
+
+    if (searchQuery) {
+      query = query.or(`title.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`);
+    }
+
+    if (featureId) {
+      query = query.eq("feature_id", featureId);
+    }
+
+    if (status) {
+      query = query.eq("status", status);
+    }
+
+    if (priority) {
+      query = query.eq("priority", priority);
+    }
+
+    // Execute query
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    // Determine if there are more results
+    const hasMore = data.length === pageSize;
+
+    return { data: data || [], hasMore };
+  } catch (error) {
+    console.error("Error fetching paginated test cases:", error);
+    throw error;
+  }
+};
+
+/**
+ * Batch create test executions for a test run
+ */
+export const batchCreateTestExecutions = async (
+  testRunId: string,
+  testCaseIds: string[]
+): Promise<void> => {
+  try {
+    if (!testCaseIds.length) return;
+
+    // Get current user or use a default ID
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id || "00000000-0000-0000-0000-000000000000";
+
+    // Create all executions at once
+    const executions = testCaseIds.map(testCaseId => ({
+      test_run_id: testRunId,
+      test_case_id: testCaseId,
+      status: "not_executed",
+      executed_by: userId,
+      executed_at: new Date().toISOString()
+    }));
+
+    const { error } = await supabase
+      .from("test_executions")
+      .insert(executions);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error("Error batch creating test executions:", error);
+    throw error;
+  }
+};
+
+/**
+ * Enhanced function to get test cases with their steps in a single query
+ */
+export const getTestCasesWithSteps = async (options: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  testType?: string;
+  featureId?: string;
+}): Promise<TestCase[]> => {
+  try {
+    const { limit = 100, offset = 0, search, testType, featureId } = options;
+
+    const { data, error } = await supabase.rpc('get_all_test_cases_with_steps', {
+      p_limit: limit,
+      p_offset: offset,
+      p_search: search || null,
+      p_test_type: testType || null,
+      p_feature_id: featureId || null
+    });
+
+    if (error) throw error;
+
+    // Data is already in the correct format from our function
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching test cases with steps:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get a single test case with its steps
+ */
+export const getTestCaseWithSteps = async (testCaseId: string): Promise<TestCase> => {
+  try {
+    const { data, error } = await supabase.rpc('get_test_case_with_steps', {
+      p_test_case_id: testCaseId
+    });
+
+    if (error) throw error;
+
+    // Combine the test case with its steps from the function result
+    const testCase = data.test_case;
+    testCase.steps = data.steps || [];
+
+    return testCase;
+  } catch (error) {
+    console.error("Error fetching test case with steps:", error);
+    throw error;
+  }
 };

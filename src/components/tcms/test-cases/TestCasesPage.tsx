@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import TCMSLayout from "../layout/TCMSLayout";
 import TCMSHeader from "../layout/TCMSHeader";
 import TestCasesList from "./TestCasesList";
 import TestCaseForm from "../layout/TestCaseForm";
 import { TestCase } from "../types";
-import { createTestCase, getTestStepsByTestCaseId } from "../api";
+import { createTestCase, getTestCasesWithSteps, getTestCaseWithSteps } from "../api";
 import { useToast } from "@/components/ui/use-toast";
-import { supabase } from "../../../../supabase/supabase";
+import { useDebouncedCallback } from "use-debounce";
 
 const TestCasesPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -19,62 +19,53 @@ const TestCasesPage = () => {
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
+  // Debounced search function
+  const debouncedSearch = useDebouncedCallback(
+    (query: string) => {
+      loadTestCases(query);
+    },
+    300
+  );
+
+  // Load test cases with steps already included
+  const loadTestCases = useCallback(async (searchTerm?: string) => {
+    try {
+      setLoading(true);
+
+      const data = await getTestCasesWithSteps({
+        search: searchTerm || searchQuery,
+        limit: 100, // You can make this adjustable
+        offset: 0
+      });
+
+      setTestCases(data);
+    } catch (error) {
+      console.error("Error loading test cases:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load test cases",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [searchQuery]);
+
   // Load test cases when component mounts
   useEffect(() => {
-    const loadTestCases = async () => {
-      try {
-        setLoading(true);
-        const { data, error } = await supabase
-          .from("test_cases")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-        setTestCases(data || []);
-      } catch (error) {
-        console.error("Error loading test cases:", error);
-        toast({
-          title: "Error",
-          description: "Failed to load test cases",
-          variant: "destructive",
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-
     loadTestCases();
   }, []);
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
+    debouncedSearch(query);
   };
 
-  const handleSelectTestCase = async (testCase: TestCase) => {
-    try {
-      // First set the test case to show basic info while we load steps
-      setSelectedTestCase(testCase);
-      setIsViewDialogOpen(true);
-
-      // Fetch steps for this test case
-      const steps = await getTestStepsByTestCaseId(testCase.id);
-
-      // Update the test case with steps
-      setSelectedTestCase(prevTestCase => {
-        if (!prevTestCase) return testCase;
-        return {
-          ...prevTestCase,
-          steps: steps || []
-        };
-      });
-    } catch (error) {
-      console.error("Error loading test steps:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load test steps",
-        variant: "destructive",
-      });
-    }
+  // Since steps are now included with the test case, this is much simpler
+  const handleSelectTestCase = (testCase: TestCase) => {
+    // No need to fetch steps separately - they're already included
+    setSelectedTestCase(testCase);
+    setIsViewDialogOpen(true);
   };
 
   const handleCreateTestCase = () => {
@@ -86,13 +77,8 @@ const TestCasesPage = () => {
       // Create the test case in the database
       const newTestCase = await createTestCase(testCase);
 
-      // Check if this test case already exists in our state
-      const alreadyExists = testCases.some(tc => tc.id === newTestCase.id);
-
-      if (!alreadyExists) {
-        // Only add to state if it's not already there
-        setTestCases([newTestCase, ...testCases]);
-      }
+      // Refresh the entire list (or we could insert the new case at the top)
+      loadTestCases();
 
       toast({
         title: "Success",
@@ -134,26 +120,25 @@ const TestCasesPage = () => {
         <TestCaseForm
           isOpen={isViewDialogOpen}
           onClose={() => setIsViewDialogOpen(false)}
-          onSubmit={(updatedTestCase) => {
-            console.log("Updating test case:", {
-              ...selectedTestCase,
-              ...updatedTestCase,
-            });
+          onSubmit={async (updatedTestCase) => {
+            try {
+              // No need to handle steps separately anymore
+              // After update, refresh our list or update the test case in state
+              await loadTestCases();
 
-            // Update the test case in the list
-            setTestCases(
-              testCases.map((tc) =>
-                tc.id === selectedTestCase.id
-                  ? { ...tc, ...updatedTestCase }
-                  : tc,
-              ),
-            );
-
-            toast({
-              title: "Success",
-              description: "Test case updated successfully",
-            });
-            setIsViewDialogOpen(false);
+              toast({
+                title: "Success",
+                description: "Test case updated successfully",
+              });
+              setIsViewDialogOpen(false);
+            } catch (error) {
+              console.error("Error updating test case:", error);
+              toast({
+                title: "Error",
+                description: "Failed to update test case",
+                variant: "destructive",
+              });
+            }
           }}
           testCase={selectedTestCase}
           isEditing={true}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useReducer } from "react";
 import TCMSLayout from "../layout/TCMSLayout";
 import TCMSHeader from "../layout/TCMSHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,6 +54,82 @@ const ErrorFallback = ({error}) => {
   );
 };
 
+// Optimized reducer for test case state management
+type TestCasesState = {
+  manual: any[];
+  automated: any[];
+  loading: boolean;
+  error: Error | null;
+};
+
+type TestCasesAction =
+  | { type: 'FETCH_START' }
+  | { type: 'FETCH_SUCCESS'; payload: { manual: any[]; automated: any[] } }
+  | { type: 'FETCH_ERROR'; payload: Error }
+  | { type: 'UPDATE_STATUSES'; payload: Record<string, any> }
+  | { type: 'UPDATE_TEST_CASE'; payload: { id: string; type: 'manual' | 'automated'; updates: any } };
+
+const testCasesReducer = (state: TestCasesState, action: TestCasesAction): TestCasesState => {
+  switch (action.type) {
+    case 'FETCH_START':
+      return { ...state, loading: true, error: null };
+    case 'FETCH_SUCCESS':
+      return {
+        manual: action.payload.manual,
+        automated: action.payload.automated,
+        loading: false,
+        error: null
+      };
+    case 'FETCH_ERROR':
+      return { ...state, loading: false, error: action.payload };
+    case 'UPDATE_STATUSES':
+      return {
+        ...state,
+        manual: state.manual.map(testCase => {
+          const execution = action.payload[testCase.id];
+          let status = execution ? execution.status : 'not_executed';
+          if (status === 'pending') status = 'not_executed';
+          return {
+            ...testCase,
+            status,
+            lastExecuted: execution ? execution.executed_at : null
+          };
+        }),
+        automated: state.automated.map(testCase => {
+          const execution = action.payload[testCase.id];
+          let status = execution ? execution.status : 'not_executed';
+          if (status === 'pending') status = 'not_executed';
+          return {
+            ...testCase,
+            status,
+            lastExecuted: execution ? execution.executed_at : null
+          };
+        })
+      };
+    case 'UPDATE_TEST_CASE':
+      if (action.payload.type === 'manual') {
+        return {
+          ...state,
+          manual: state.manual.map(tc =>
+            tc.id === action.payload.id ? { ...tc, ...action.payload.updates } : tc
+          )
+        };
+      } else {
+        return {
+          ...state,
+          automated: state.automated.map(tc =>
+            tc.id === action.payload.id ? { ...tc, ...action.payload.updates } : tc
+          )
+        };
+      }
+    default:
+      return state;
+  }
+};
+
+// Page size for pagination
+const PAGE_SIZE = 20;
+
 const TestExecutionPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRelease, setSelectedRelease] = useState("");
@@ -66,13 +142,19 @@ const TestExecutionPage = () => {
   const { toast } = useToast();
   const [testSteps, setTestSteps] = useState<any[]>([]);
 
-  // State for test cases
-  const [manualTestCases, setManualTestCases] = useState<any[]>([]);
-  const [automatedTestCases, setAutomatedTestCases] = useState<any[]>([]);
-  const [loadingTestCases, setLoadingTestCases] = useState(true);
+  // Combined test case state with reducer
+  const [testCasesState, dispatch] = useReducer(testCasesReducer, {
+    manual: [],
+    automated: [],
+    loading: true,
+    error: null
+  });
+
+  // Add pagination state
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
 
   // Add initial safe state values
-  const [error, setError] = useState<Error | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadingExecutions, setLoadingExecutions] = useState(false);
   const [testExecutions, setTestExecutions] = useState<Record<string, any>>({});
@@ -88,111 +170,156 @@ const TestExecutionPage = () => {
   );
   const [selectedTestRun, setSelectedTestRun] = useState("");
 
-  // Move updateTestCaseStatuses inside the component so it has access to state setters
-  const updateTestCaseStatuses = (executionsMap: Record<string, any>) => {
-    // Add debugging to see what's in executionsMap
-    console.log("Updating test case statuses with executions:", executionsMap);
-
-    setManualTestCases(prevTestCases =>
-      prevTestCases.map(testCase => {
-        const execution = executionsMap[testCase.id];
-        // Map "pending" status to "not_executed" for UI consistency
-        let status = execution ? execution.status : 'not_executed';
-        if (status === 'pending') status = 'not_executed';
-
-        return {
-          ...testCase,
-          status: status,
-          lastExecuted: execution ? execution.executed_at : null
-        };
-      })
-    );
-
-    setAutomatedTestCases(prevTestCases =>
-      prevTestCases.map(testCase => {
-        const execution = executionsMap[testCase.id];
-        // Map "pending" status to "not_executed" for UI consistency
-        let status = execution ? execution.status : 'not_executed';
-        if (status === 'pending') status = 'not_executed';
-
-        return {
-          ...testCase,
-          status: status,
-          lastExecuted: execution ? execution.executed_at : null
-        };
-      })
-    );
+  // Add back the getStatusIcon function that was removed during optimization
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "passed":
+        return <CheckCircle className="h-5 w-5 text-green-500" />;
+      case "failed":
+        return <XCircle className="h-5 w-5 text-red-500" />;
+      case "blocked":
+        return <AlertTriangle className="h-5 w-5 text-orange-500" />;
+      case "not_executed":
+      default:
+        return <Clock className="h-5 w-5 text-gray-400" />;
+    }
   };
 
-  // Load test cases whenever component mounts, or when release/test run changes
+  const getPriorityBadge = (priority: string) => {
+    // ...existing code...
+  };
+
+  // Memoized function to load test cases with pagination and filtering
+  const loadTestCases = useCallback(async (reset = false) => {
+    try {
+      // If resetting pagination, start from page 0
+      const currentPage = reset ? 0 : page;
+      if (reset) {
+        setPage(0);
+        setHasMore(true);
+      }
+
+      dispatch({ type: 'FETCH_START' });
+
+      // Build query with filters and pagination
+      let query = supabase
+        .from("test_cases")
+        .select("*, features(name)")
+        .eq("test_type", activeTab) // Filter by current tab
+        .range(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE - 1)
+        .order("created_at", { ascending: false });
+
+      // Add search filter if present
+      if (searchQuery) {
+        query = query.ilike("title", `%${searchQuery}%`);
+      }
+
+      const { data: pageTestCases, error } = await query;
+
+      if (error) throw error;
+
+      // Check if we've reached the end of data
+      setHasMore(pageTestCases.length === PAGE_SIZE);
+
+      // Process test cases
+      const processedCases = (pageTestCases || []).map(testCase => ({
+        id: testCase.id,
+        title: testCase.title || "Untitled Test Case",
+        feature: testCase.features?.name || "Unknown Feature",
+        feature_id: testCase.feature_id,
+        priority: testCase.priority || "medium",
+        status: "not_executed", // Default status - will be updated if there's an execution
+        assignedTo: "",
+        lastExecuted: null,
+        description: testCase.description || "",
+        test_type: testCase.test_type || "manual",
+        script: testCase.test_type === "automated"
+          ? `${(testCase.title || "untitled").toLowerCase().replace(/\s+/g, "_")}.py`
+          : null,
+      }));
+
+      // Update state based on active tab
+      if (activeTab === 'manual') {
+        dispatch({
+          type: 'FETCH_SUCCESS',
+          payload: {
+            manual: reset ? processedCases : [...testCasesState.manual, ...processedCases],
+            automated: testCasesState.automated
+          }
+        });
+      } else {
+        dispatch({
+          type: 'FETCH_SUCCESS',
+          payload: {
+            manual: testCasesState.manual,
+            automated: reset ? processedCases : [...testCasesState.automated, ...processedCases]
+          }
+        });
+      }
+
+      // If there's a selected test run, load its executions
+      if (selectedTestRun && reset) {
+        loadTestExecutions(selectedTestRun);
+      }
+    } catch (err) {
+      console.error("Error loading test cases:", err);
+      dispatch({ type: 'FETCH_ERROR', payload: err instanceof Error ? err : new Error(String(err)) });
+      toast({
+        title: "Error",
+        description: "Failed to load test cases",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [page, searchQuery, activeTab, selectedTestRun]);
+
+  // Load initial data in parallel when component mounts
   useEffect(() => {
-    const loadTestCases = async () => {
+    const loadInitialData = async () => {
+      setIsLoading(true);
       try {
-        setLoadingTestCases(true);
-        setError(null);
+        // Load releases and test cases in parallel
+        const [releasesResponse] = await Promise.all([
+          getReleases(),
+          loadTestCases(true) // true = reset pagination
+        ]);
 
-        // Start with all test cases
-        const { data: allTestCases, error } = await supabase
-          .from("test_cases")
-          .select("*, features(name)")
-          .order("created_at", { ascending: false });
+        setReleases(releasesResponse);
 
-        if (error) throw error;
+        // Select first release if available
+        if (releasesResponse.length > 0) {
+          setSelectedRelease(releasesResponse[0].id);
+          // Load test runs for the first release
+          const testRunsData = await getTestRunsByReleaseId(releasesResponse[0].id);
+          setTestRuns(testRunsData);
 
-        // Process test cases and separate them by type
-        const manual = [];
-        const automated = [];
-
-        for (const testCase of allTestCases || []) {
-          const processedTestCase = {
-            id: testCase.id,
-            title: testCase.title || "Untitled Test Case",
-            feature: testCase.features?.name || "Unknown Feature",
-            feature_id: testCase.feature_id,
-            priority: testCase.priority || "medium",
-            status: "not_executed", // Default status - will be updated if there's an execution
-            assignedTo: "",
-            lastExecuted: null,
-            description: testCase.description || "",
-            test_type: testCase.test_type || "manual",
-            script:
-              testCase.test_type === "automated"
-                ? `${(testCase.title || "untitled").toLowerCase().replace(/\s+/g, "_")}.py`
-                : null,
-          };
-
-          if (testCase.test_type === "manual") {
-            manual.push(processedTestCase);
-          } else {
-            automated.push(processedTestCase);
+          // Select first test run if available
+          if (testRunsData.length > 0) {
+            setSelectedTestRun(testRunsData[0].id);
           }
         }
-
-        setManualTestCases(manual);
-        setAutomatedTestCases(automated);
-
-        // If there's a selected test run, load its executions
-        if (selectedTestRun) {
-          loadTestExecutions(selectedTestRun);
-        }
-      } catch (err) {
-        console.error("Error loading test cases:", err);
-        setError(err instanceof Error ? err : new Error(String(err)));
+      } catch (error) {
+        console.error("Error loading initial data:", error);
         toast({
           title: "Error",
-          description: "Failed to load test cases",
+          description: "Failed to load initial data",
           variant: "destructive",
         });
       } finally {
-        setLoadingTestCases(false);
         setIsLoading(false);
       }
     };
 
-    loadTestCases();
-  }, [selectedTestRun]); // Add selectedTestRun as dependency to reload when it changes
+    loadInitialData();
+  }, []);
 
-  // Create a separate function to load test executions
+  // Reload test cases when tab or search changes
+  useEffect(() => {
+    loadTestCases(true); // Reset pagination
+  }, [activeTab, searchQuery]);
+
+  // Optimized function to load test executions
   const loadTestExecutions = async (runId) => {
     if (!runId) {
       setTestExecutions({});
@@ -201,7 +328,6 @@ const TestExecutionPage = () => {
 
     try {
       setLoadingExecutions(true);
-      console.log("Loading test executions for run:", runId);
 
       // Load test executions for the selected test run
       const { data, error } = await supabase
@@ -210,39 +336,20 @@ const TestExecutionPage = () => {
         .eq("test_run_id", runId);
 
       if (error) throw error;
-      console.log("Loaded test executions:", data);
 
-      if (!data || data.length === 0) {
-        // No executions found - we need to create them for all test cases
-        await createExecutionsForTestRun(runId);
+      // Create a map of executions by test case ID
+      const executionsMap = {};
 
-        // Reload executions after creating them
-        const { data: newData, error: newError } = await supabase
-          .from("test_executions")
-          .select("*")
-          .eq("test_run_id", runId);
-
-        if (newError) throw newError;
-        console.log("Created and loaded new test executions:", newData);
-
-        // Map executions by test case ID
-        const executionsMap = {};
-        newData?.forEach(execution => {
-          executionsMap[execution.test_case_id] = execution;
-        });
-
-        setTestExecutions(executionsMap);
-        updateTestCaseStatuses(executionsMap);
-      } else {
-        // Map executions by test case ID
-        const executionsMap = {};
+      if (data && data.length > 0) {
         data.forEach(execution => {
           executionsMap[execution.test_case_id] = execution;
         });
 
-        console.log("Mapped executions by test case ID:", executionsMap);
         setTestExecutions(executionsMap);
-        updateTestCaseStatuses(executionsMap);
+        dispatch({ type: 'UPDATE_STATUSES', payload: executionsMap });
+      } else {
+        // No executions found - create them in batch and avoid re-fetching
+        await createExecutionsForTestRun(runId);
       }
     } catch (error) {
       console.error("Error loading test executions:", error);
@@ -256,43 +363,52 @@ const TestExecutionPage = () => {
     }
   };
 
-  // New function to create test executions if they don't exist
+  // Optimized function to create test executions with a single request
   const createExecutionsForTestRun = async (runId) => {
     try {
-      // Get all test cases
-      const { data: testCases, error: testCasesError } = await supabase
-        .from("test_cases")
-        .select("id");
-
-      if (testCasesError) throw testCasesError;
-
       // Get current user or use a default ID
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       const userId = user?.id || "00000000-0000-0000-0000-000000000000";
 
-      // Create test executions for each test case
-      if (testCases && testCases.length > 0) {
-        const testExecutions = testCases.map(testCase => ({
+      // Get all test cases IDs needed for this test run
+      const testCaseIds = [
+        ...testCasesState.manual.map(tc => tc.id),
+        ...testCasesState.automated.map(tc => tc.id)
+      ];
+
+      if (testCaseIds.length === 0) return;
+
+      // Create execution records
+      const executionsMap = {};
+      const testExecutions = testCaseIds.map(testCaseId => {
+        const execution = {
           test_run_id: runId,
-          test_case_id: testCase.id,
-          status: "not_executed", // Change from "pending" to "not_executed" for consistency
+          test_case_id: testCaseId,
+          status: "not_executed",
           executed_by: userId,
-          executed_at: new Date().toISOString(), // Set current time so it shows in the UI
-        }));
+          executed_at: new Date().toISOString()
+        };
 
-        const { error: executionsError } = await supabase
-          .from("test_executions")
-          .insert(testExecutions);
+        // Also store in our local map to avoid refetching
+        executionsMap[testCaseId] = execution;
+        return execution;
+      });
 
-        if (executionsError) throw executionsError;
+      // Create all executions in a single request
+      const { error: executionsError } = await supabase
+        .from("test_executions")
+        .insert(testExecutions);
 
-        toast({
-          title: "Test Cases Added",
-          description: "Test cases have been added to this test run",
-        });
-      }
+      if (executionsError) throw executionsError;
+
+      // Update UI state without requiring a refetch
+      setTestExecutions(executionsMap);
+      dispatch({ type: 'UPDATE_STATUSES', payload: executionsMap });
+
+      toast({
+        title: "Test Cases Added",
+        description: "Test cases have been added to this test run",
+      });
     } catch (error) {
       console.error("Error creating test executions:", error);
       throw error;
@@ -303,32 +419,8 @@ const TestExecutionPage = () => {
     setSearchQuery(query);
   };
 
-  // Load releases on component mount
-  useEffect(() => {
-    const loadReleases = async () => {
-      try {
-        const releasesData = await getReleases();
-        setReleases(releasesData);
-        if (releasesData.length > 0) {
-          setSelectedRelease(releasesData[0].id);
-          // Load test runs for the first release
-          loadTestRuns(releasesData[0].id);
-        }
-      } catch (error) {
-        console.error("Error loading releases:", error);
-        toast({
-          title: "Error",
-          description: "Failed to load releases",
-          variant: "destructive",
-        });
-      }
-    };
-
-    loadReleases();
-  }, []);
-
   // Load test runs when selected release changes
-  const loadTestRuns = async (releaseId: string) => {
+  const loadTestRuns = useCallback(async (releaseId: string) => {
     try {
       const testRunsData = await getTestRunsByReleaseId(releaseId);
       setTestRuns(testRunsData);
@@ -345,14 +437,14 @@ const TestExecutionPage = () => {
         variant: "destructive",
       });
     }
-  };
+  }, []);
 
   // Update test runs when selected release changes
   useEffect(() => {
     if (selectedRelease) {
       loadTestRuns(selectedRelease);
     }
-  }, [selectedRelease]);
+  }, [selectedRelease, loadTestRuns]);
 
   // Update test executions when selected test run changes
   useEffect(() => {
@@ -360,77 +452,6 @@ const TestExecutionPage = () => {
       loadTestExecutions(selectedTestRun);
     }
   }, [selectedTestRun]);
-
-  // Reload test cases and reset state when release changes
-  useEffect(() => {
-    // Clear selected test run when release changes
-    setTestExecutions({});
-
-    // Load test data with updated statuses when release or test run changes
-    const loadTestData = async () => {
-      if (!selectedRelease) return;
-
-      try {
-        setIsLoading(true);
-        // Load test cases as before
-        const { data, error } = await supabase
-          .from("test_cases")
-          .select("*, features(name)")
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-
-        // Process test cases as before
-        // ...existing code for splitting test cases into manual and automated...
-        const manual = [];
-        const automated = [];
-
-        // Split test cases as before
-        // (using the existing code but now we'll default status to 'not_executed')
-        // ...
-
-        // Set state with the loaded test cases
-        setManualTestCases(manual);
-        setAutomatedTestCases(automated);
-
-      } catch (err) {
-        // ...existing error handling...
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadTestData();
-  }, [selectedRelease]);
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "passed":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case "failed":
-        return <XCircle className="h-5 w-5 text-red-500" />;
-      case "blocked":
-        return <AlertTriangle className="h-5 w-5 text-orange-500" />;
-      case "not_executed":
-      default:
-        return <Clock className="h-5 w-5 text-gray-400" />;
-    }
-  };
-
-  const getPriorityBadge = (priority: string) => {
-    switch (priority) {
-      case "critical":
-        return <Badge className="bg-red-100 text-red-800">Critical</Badge>;
-      case "high":
-        return <Badge className="bg-orange-100 text-orange-800">High</Badge>;
-      case "medium":
-        return <Badge className="bg-blue-100 text-blue-800">Medium</Badge>;
-      case "low":
-        return <Badge className="bg-green-100 text-green-800">Low</Badge>;
-      default:
-        return null;
-    }
-  };
 
   // Fix the execute step button handler to prevent null reference errors
   const handleExecuteTest = async (testCase) => {
@@ -502,13 +523,21 @@ const TestExecutionPage = () => {
     }
   };
 
+  // Infinite scrolling handler for loading more test cases
+  const handleLoadMore = useCallback(() => {
+    if (!testCasesState.loading && hasMore) {
+      setPage(prevPage => prevPage + 1);
+      loadTestCases(false); // false = don't reset pagination
+    }
+  }, [testCasesState.loading, hasMore, loadTestCases]);
+
   // Return early if there's an error
-  if (error) {
+  if (testCasesState.error) {
     return (
       <TCMSLayout>
         <TCMSHeader title="Test Execution" onSearch={handleSearch} />
         <div className="p-6">
-          <ErrorFallback error={error} />
+          <ErrorFallback error={testCasesState.error} />
         </div>
       </TCMSLayout>
     );
@@ -529,10 +558,12 @@ const TestExecutionPage = () => {
     );
   }
 
-  // Add a loading indicator in the UI for test execution data
-  // Modify the rendering of test cases to show loading state
-  const renderTestCases = (testCases, isLoading) => {
-    if (isLoading) {
+  // Render test cases with optimized loading states
+  const renderTestCases = (testType) => {
+    const testCases = testType === 'manual' ? testCasesState.manual : testCasesState.automated;
+    const isLoading = testCasesState.loading;
+
+    if (isLoading && testCases.length === 0) {
       return (
         <div className="text-center py-8">
           <p className="text-gray-500">Loading test cases...</p>
@@ -540,7 +571,7 @@ const TestExecutionPage = () => {
       );
     }
 
-    if (loadingExecutions) {
+    if (loadingExecutions && testCases.length === 0) {
       return (
         <div className="text-center py-8">
           <p className="text-gray-500">Loading test execution data...</p>
@@ -558,50 +589,76 @@ const TestExecutionPage = () => {
       );
     }
 
-    // Map through test cases with updated status
-    return testCases.map((testCase) => (
-      <div
-        key={testCase.id}
-        className="p-4 border border-gray-100 rounded-lg hover:border-blue-200 hover:bg-blue-50/30 transition-colors cursor-pointer flex items-center justify-between"
-      >
-        <div className="flex items-center gap-4">
-          {getStatusIcon(testCase.status)}
-          <div>
-            <h3 className="font-medium text-gray-900">
-              {testCase.title}
-            </h3>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-gray-500">
-                {testCase.feature}
-              </span>
-              {getPriorityBadge(testCase.priority)}
-              {testCase.test_type === 'automated' && (
-                <span className="text-xs text-gray-500">
-                  {testCase.script}
-                </span>
+    return (
+      <>
+        {/* Test case list */}
+        <div className="space-y-4">
+          {testCases.map((testCase) => (
+            <div
+              key={testCase.id}
+              className="p-4 border border-gray-100 rounded-lg hover:border-blue-200 hover:bg-blue-50/30 transition-colors cursor-pointer flex items-center justify-between"
+            >
+              <div className="flex items-center gap-4">
+                {getStatusIcon(testCase.status)}
+                <div>
+                  <h3 className="font-medium text-gray-900">
+                    {testCase.title}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-gray-500">
+                      {testCase.feature}
+                    </span>
+                    {getPriorityBadge(testCase.priority)}
+                    {testCase.test_type === 'automated' && (
+                      <span className="text-xs text-gray-500">
+                        {testCase.script}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                {testExecutions[testCase.id] && testExecutions[testCase.id].executed_at && (
+                  <div className="text-xs text-gray-500">
+                    Last executed: {new Date(testExecutions[testCase.id].executed_at).toLocaleString()}
+                  </div>
+                )}
+                <Button
+                  className="bg-blue-500 hover:bg-blue-600 text-white rounded-full h-8 px-3 shadow-sm transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleExecuteTest(testCase);
+                  }}
+                >
+                  <Play className="mr-1 h-3 w-3" />
+                  {testCase.test_type === 'manual' ? 'Execute' : 'Run'}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Load more button */}
+        {hasMore && (
+          <div className="flex justify-center mt-6">
+            <Button
+              variant="outline"
+              onClick={handleLoadMore}
+              disabled={testCasesState.loading}
+            >
+              {testCasesState.loading ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-gray-500 border-t-transparent"></div>
+                  Loading...
+                </>
+              ) : (
+                'Load More'
               )}
-            </div>
+            </Button>
           </div>
-        </div>
-        <div className="flex items-center gap-4">
-          {testExecutions[testCase.id] && (
-            <div className="text-xs text-gray-500">
-              Last executed: {new Date(testExecutions[testCase.id].executed_at).toLocaleString()}
-            </div>
-          )}
-          <Button
-            className="bg-blue-500 hover:bg-blue-600 text-white rounded-full h-8 px-3 shadow-sm transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleExecuteTest(testCase);
-            }}
-          >
-            <Play className="mr-1 h-3 w-3" />
-            {testCase.test_type === 'manual' ? 'Execute' : 'Run'}
-          </Button>
-        </div>
-      </div>
-    ));
+        )}
+      </>
+    );
   };
 
   return (
@@ -717,9 +774,9 @@ const TestExecutionPage = () => {
                     <div className="h-3 w-3 rounded-full bg-green-500"></div>
                     <span className="text-sm text-gray-700">
                       Passed:{" "}
-                      {manualTestCases.filter((tc) => tc.status === "passed")
+                      {testCasesState.manual.filter((tc) => tc.status === "passed")
                         .length +
-                        automatedTestCases.filter((tc) => tc.status === "passed")
+                        testCasesState.automated.filter((tc) => tc.status === "passed")
                           .length}
                     </span>
                   </div>
@@ -727,9 +784,9 @@ const TestExecutionPage = () => {
                     <div className="h-3 w-3 rounded-full bg-red-500"></div>
                     <span className="text-sm text-gray-700">
                       Failed:{" "}
-                      {manualTestCases.filter((tc) => tc.status === "failed")
+                      {testCasesState.manual.filter((tc) => tc.status === "failed")
                         .length +
-                        automatedTestCases.filter((tc) => tc.status === "failed")
+                        testCasesState.automated.filter((tc) => tc.status === "failed")
                           .length}
                     </span>
                   </div>
@@ -737,9 +794,9 @@ const TestExecutionPage = () => {
                     <div className="h-3 w-3 rounded-full bg-orange-500"></div>
                     <span className="text-sm text-gray-700">
                       Blocked:{" "}
-                      {manualTestCases.filter((tc) => tc.status === "blocked")
+                      {testCasesState.manual.filter((tc) => tc.status === "blocked")
                         .length +
-                        automatedTestCases.filter((tc) => tc.status === "blocked")
+                        testCasesState.automated.filter((tc) => tc.status === "blocked")
                           .length}
                     </span>
                   </div>
@@ -747,17 +804,17 @@ const TestExecutionPage = () => {
                     <div className="h-3 w-3 rounded-full bg-gray-400"></div>
                     <span className="text-sm text-gray-700">
                       Not Executed:{" "}
-                      {manualTestCases.filter(
+                      {testCasesState.manual.filter(
                         (tc) => tc.status === "not_executed",
                       ).length +
-                        automatedTestCases.filter(
+                        testCasesState.automated.filter(
                           (tc) => tc.status === "not_executed",
                         ).length}
                     </span>
                   </div>
                 </div>
                 <div className="text-sm text-gray-500">
-                  Total: {manualTestCases.length + automatedTestCases.length} test
+                  Total: {testCasesState.manual.length + testCasesState.automated.length} test
                   cases
                 </div>
               </div>
@@ -765,7 +822,11 @@ const TestExecutionPage = () => {
               <Tabs
                 defaultValue="manual"
                 className="w-full"
-                onValueChange={setActiveTab}
+                onValueChange={(value) => {
+                  setActiveTab(value);
+                  // Reset pagination when tab changes
+                  setPage(0);
+                }}
               >
                 <TabsList className="grid w-full grid-cols-2 mb-6">
                   <TabsTrigger value="manual">Manual Tests</TabsTrigger>
@@ -773,11 +834,11 @@ const TestExecutionPage = () => {
                 </TabsList>
 
                 <TabsContent value="manual" className="space-y-4">
-                  {renderTestCases(manualTestCases, loadingTestCases)}
+                  {renderTestCases('manual')}
                 </TabsContent>
 
                 <TabsContent value="automated" className="space-y-4">
-                  {renderTestCases(automatedTestCases, loadingTestCases)}
+                  {renderTestCases('automated')}
                 </TabsContent>
               </Tabs>
             </CardContent>
@@ -859,21 +920,23 @@ const TestExecutionPage = () => {
 
                     // Update the test case status in the UI
                     if (selectedTestCase.test_type === "manual") {
-                      setManualTestCases(
-                        manualTestCases.map((tc) =>
-                          tc.id === selectedTestCase.id
-                            ? { ...tc, status: results.status }
-                            : tc,
-                        ),
-                      );
+                      dispatch({
+                        type: 'UPDATE_TEST_CASE',
+                        payload: {
+                          id: selectedTestCase.id,
+                          type: 'manual',
+                          updates: { status: results.status }
+                        }
+                      });
                     } else {
-                      setAutomatedTestCases(
-                        automatedTestCases.map((tc) =>
-                          tc.id === selectedTestCase.id
-                            ? { ...tc, status: results.status }
-                            : tc,
-                        ),
-                      );
+                      dispatch({
+                        type: 'UPDATE_TEST_CASE',
+                        payload: {
+                          id: selectedTestCase.id,
+                          type: 'automated',
+                          updates: { status: results.status }
+                        }
+                      });
                     }
 
                     setIsExecutingTest(false);
