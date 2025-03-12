@@ -19,6 +19,7 @@ import {
   Clock,
   Play,
   Plus,
+  Filter,
 } from "lucide-react";
 import TestStepExecution from "./TestStepExecution";
 import BugForm from "../bugs/BugForm";
@@ -42,10 +43,21 @@ import {
   createTestStepResults,
   createBug,
   getTestRunsByReleaseId,
+  getFeatures,
+  getTags,
 } from "../api";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 // Simple error boundary component
-const ErrorFallback = ({error}) => {
+const ErrorFallback = ({ error }) => {
   return (
     <div className="p-6 bg-red-50 border border-red-200 rounded-lg">
       <h3 className="text-lg font-medium text-red-800">Something went wrong</h3>
@@ -63,42 +75,49 @@ type TestCasesState = {
 };
 
 type TestCasesAction =
-  | { type: 'FETCH_START' }
-  | { type: 'FETCH_SUCCESS'; payload: { manual: any[]; automated: any[] } }
-  | { type: 'FETCH_ERROR'; payload: Error }
-  | { type: 'UPDATE_STATUSES'; payload: Record<string, any> }
-  | { type: 'UPDATE_TEST_CASE'; payload: { id: string; type: 'manual' | 'automated'; updates: any } };
+  | { type: "FETCH_START" }
+  | { type: "FETCH_SUCCESS"; payload: { manual: any[]; automated: any[] } }
+  | { type: "FETCH_ERROR"; payload: Error }
+  | { type: "UPDATE_STATUSES"; payload: Record<string, any> }
+  | {
+      type: "UPDATE_TEST_CASE";
+      payload: { id: string; type: "manual" | "automated"; updates: any };
+    }
+  | { type: "FILTER_BY_RESULT"; payload: string };
 
-const testCasesReducer = (state: TestCasesState, action: TestCasesAction): TestCasesState => {
+const testCasesReducer = (
+  state: TestCasesState,
+  action: TestCasesAction
+): TestCasesState => {
   switch (action.type) {
-    case 'FETCH_START':
+    case "FETCH_START":
       return { ...state, loading: true, error: null };
-    case 'FETCH_SUCCESS':
+    case "FETCH_SUCCESS":
       return {
         manual: action.payload.manual,
         automated: action.payload.automated,
         loading: false,
-        error: null
+        error: null,
       };
-    case 'FETCH_ERROR':
+    case "FETCH_ERROR":
       return { ...state, loading: false, error: action.payload };
-    case 'UPDATE_STATUSES':
+    case "UPDATE_STATUSES":
       return {
         ...state,
-        manual: state.manual.map(testCase => {
+        manual: state.manual.map((testCase) => {
           const execution = action.payload[testCase.id];
-          let status = execution ? execution.status : 'not_executed';
-          if (status === 'pending') status = 'not_executed';
+          let status = execution ? execution.status : "not_executed";
+          if (status === "pending") status = "not_executed";
           return {
             ...testCase,
             status,
             lastExecuted: execution ? execution.executed_at : null
           };
         }),
-        automated: state.automated.map(testCase => {
+        automated: state.automated.map((testCase) => {
           const execution = action.payload[testCase.id];
-          let status = execution ? execution.status : 'not_executed';
-          if (status === 'pending') status = 'not_executed';
+          let status = execution ? execution.status : "not_executed";
+          if (status === "pending") status = "not_executed";
           return {
             ...testCase,
             status,
@@ -106,8 +125,8 @@ const testCasesReducer = (state: TestCasesState, action: TestCasesAction): TestC
           };
         })
       };
-    case 'UPDATE_TEST_CASE':
-      if (action.payload.type === 'manual') {
+    case "UPDATE_TEST_CASE":
+      if (action.payload.type === "manual") {
         return {
           ...state,
           manual: state.manual.map(tc =>
@@ -122,6 +141,18 @@ const testCasesReducer = (state: TestCasesState, action: TestCasesAction): TestC
           )
         };
       }
+    case "FILTER_BY_RESULT":
+      return {
+        ...state,
+        manual: state.manual.filter(tc => {
+          const execution = testExecutions[tc.id];
+          return execution && execution.status === action.payload;
+        }),
+        automated: state.automated.filter(tc => {
+          const execution = testExecutions[tc.id];
+          return execution && execution.status === action.payload;
+        })
+      };
     default:
       return state;
   }

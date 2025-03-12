@@ -4,7 +4,7 @@ import TCMSHeader from "../layout/TCMSHeader";
 import TestCasesList from "./TestCasesList";
 import TestCaseForm from "../layout/TestCaseForm";
 import { TestCase } from "../types";
-import { createTestCase, getTestCasesWithSteps, getTestCaseWithSteps } from "../api";
+import { createTestCase, getTestCasesWithSteps, getFeatures, getTags } from "../api";
 import { useToast } from "@/components/ui/use-toast";
 import { useDebouncedCallback } from "use-debounce";
 
@@ -18,6 +18,19 @@ const TestCasesPage = () => {
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const [isEditMode, setIsEditMode] = useState(false);
+
+  // New filter states
+  const [filters, setFilters] = useState({
+    featureId: "all",
+    priority: "all",
+    tagIds: [] as string[],
+    status: "all",
+  });
+
+  // Data for filters
+  const [features, setFeatures] = useState<Array<{id: string, name: string}>>([]);
+  const [tags, setTags] = useState<Array<{id: string, name: string}>>([]);
 
   // Debounced search function
   const debouncedSearch = useDebouncedCallback(
@@ -27,7 +40,7 @@ const TestCasesPage = () => {
     300
   );
 
-  // Load test cases with steps already included
+  // Load test cases with all filters
   const loadTestCases = useCallback(async (searchTerm?: string) => {
     try {
       setLoading(true);
@@ -35,7 +48,11 @@ const TestCasesPage = () => {
       const data = await getTestCasesWithSteps({
         search: searchTerm || searchQuery,
         limit: 100, // You can make this adjustable
-        offset: 0
+        offset: 0,
+        featureId: filters.featureId !== "all" ? filters.featureId : undefined,
+        priority: filters.priority !== "all" ? filters.priority : undefined,
+        tagIds: filters.tagIds.length > 0 ? filters.tagIds : undefined,
+        status: filters.status !== "all" ? filters.status : undefined
       });
 
       setTestCases(data);
@@ -49,21 +66,52 @@ const TestCasesPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery]);
+  }, [searchQuery, filters]);
 
-  // Load test cases when component mounts
+  // Load features and tags for filters
+  useEffect(() => {
+    const loadFilterData = async () => {
+      try {
+        const [featuresData, tagsData] = await Promise.all([
+          getFeatures(),
+          getTags()
+        ]);
+
+        setFeatures(featuresData);
+        setTags(tagsData);
+      } catch (error) {
+        console.error("Error loading filter data:", error);
+      }
+    };
+
+    loadFilterData();
+  }, []);
+
+  // Load test cases when component mounts or filters change
   useEffect(() => {
     loadTestCases();
-  }, []);
+  }, [loadTestCases, filters]);
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
     debouncedSearch(query);
   };
 
+  const handleFilterChange = (filterName: string, value: any) => {
+    setFilters(prev => ({
+      ...prev,
+      [filterName]: value
+    }));
+  };
+
   // Since steps are now included with the test case, this is much simpler
   const handleSelectTestCase = (testCase: TestCase) => {
-    // No need to fetch steps separately - they're already included
+    // Option to navigate to expanded view directly
+    // Uncomment this to always use expanded view
+    // navigate(`/test-cases/${testCase.id}`);
+
+    // Or keep dialog-based view as default
+    setIsEditMode(false);
     setSelectedTestCase(testCase);
     setIsViewDialogOpen(true);
   };
@@ -96,6 +144,11 @@ const TestCasesPage = () => {
     }
   };
 
+  // Handle test case deletion from the list
+  const handleDeleteTestCase = useCallback((id: string) => {
+    setTestCases(prevTestCases => prevTestCases.filter(tc => tc.id !== id));
+  }, []);
+
   return (
     <TCMSLayout>
       <TCMSHeader title="Test Cases" onSearch={handleSearch} />
@@ -105,6 +158,13 @@ const TestCasesPage = () => {
           isLoading={loading}
           onSelectTestCase={handleSelectTestCase}
           onCreateTestCase={handleCreateTestCase}
+          onDeleteTestCase={handleDeleteTestCase}
+          filters={filters}
+          onFilterChange={handleFilterChange}
+          filterOptions={{
+            features,
+            tags
+          }}
         />
       </div>
 
@@ -122,8 +182,14 @@ const TestCasesPage = () => {
           onClose={() => setIsViewDialogOpen(false)}
           onSubmit={async (updatedTestCase) => {
             try {
-              // No need to handle steps separately anymore
-              // After update, refresh our list or update the test case in state
+              // Handle deletion
+              if (updatedTestCase.deleted) {
+                handleDeleteTestCase(selectedTestCase.id);
+                setIsViewDialogOpen(false);
+                return;
+              }
+
+              // Normal update flow
               await loadTestCases();
 
               toast({
@@ -142,6 +208,7 @@ const TestCasesPage = () => {
           }}
           testCase={selectedTestCase}
           isEditing={true}
+          viewOnly={true} // Set to true to open in view mode initially
         />
       )}
     </TCMSLayout>

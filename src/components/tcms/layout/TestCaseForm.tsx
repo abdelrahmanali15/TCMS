@@ -1,4 +1,4 @@
-import React, { useReducer, useEffect, useMemo, useCallback } from "react";
+import React, { useReducer, useEffect, useMemo, useCallback, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,13 +19,38 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TestCase, TestCasePriority, TestType, TestCaseStatus } from "../types";
-import { createTestCase, updateTestCase } from "../api";
+import { createTestCase, updateTestCase, getTags, deleteTestCase } from "../api";
 import { supabase } from "../../../../supabase/supabase";
 import { useToast } from "@/components/ui/use-toast";
 import { Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { FixedSizeList } from 'react-window';
 import { useDebouncedCallback } from "use-debounce";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useNavigate } from "react-router-dom";
+import { Expand } from "lucide-react";
 
 // Define action types for the reducer
 type FormAction =
@@ -55,7 +80,7 @@ const initialFormState = {
   },
   steps: [{ step_number: 1, description: "", expected_result: "" }],
   tags: [] as string[],
-  newTag: "",
+  newTag: "", // Explicitly initialize newTag
 };
 
 // Form reducer to handle all state changes
@@ -64,10 +89,18 @@ const formReducer = (state, action: FormAction) => {
     case 'SET_FORM_DATA':
       return { ...state, formData: { ...state.formData, ...action.payload } };
     case 'UPDATE_FIELD':
-      return {
-        ...state,
-        formData: { ...state.formData, [action.field]: action.value }
-      };
+      // Check if the field belongs to formData or is a root-level property
+      if (action.field === 'newTag') {
+        return {
+          ...state,
+          newTag: action.value
+        };
+      } else {
+        return {
+          ...state,
+          formData: { ...state.formData, [action.field]: action.value }
+        };
+      }
     case 'SET_STEPS':
       return { ...state, steps: action.payload };
     case 'ADD_STEP':
@@ -112,15 +145,34 @@ const formReducer = (state, action: FormAction) => {
         tags: state.tags.filter(tag => tag !== action.tag)
       };
     case 'RESET_FORM':
+      // First log the raw tags data to debug
+      console.log("Raw tags in payload:", action.payload.tags);
+
+      // Better handling of tag data that could be in different formats
+      const tagsFromPayload = action.payload.tags || [];
+
+      let convertedTags = [];
+
+      // Handle different possible formats of tags
+      if (Array.isArray(tagsFromPayload)) {
+        convertedTags = tagsFromPayload.map(tag => {
+          if (typeof tag === 'string') return tag;
+          if (tag && typeof tag === 'object') {
+            if (tag.name) return tag.name;
+          }
+          return '';
+        }).filter(Boolean);
+      }
+
+      console.log("Converted tags:", convertedTags);
+
       return {
         formData: { ...initialFormState.formData, ...action.payload },
         steps: action.payload.steps?.length > 0
           ? [...action.payload.steps]
           : [...initialFormState.steps],
-        tags: action.payload.tags?.length > 0
-          ? [...action.payload.tags.map(tag => tag.name)]
-          : [],
-        newTag: ""
+        tags: convertedTags,
+        newTag: "" // Always reset newTag to empty string
       };
     default:
       return state;
@@ -133,6 +185,7 @@ interface TestCaseFormProps {
   onSubmit: (testCase: Partial<TestCase>) => void;
   testCase?: TestCase;
   isEditing?: boolean;
+  viewOnly?: boolean; // New prop for view-only mode
 }
 
 const TestCaseForm = ({
@@ -141,6 +194,7 @@ const TestCaseForm = ({
   onSubmit,
   testCase,
   isEditing = false,
+  viewOnly = false, // Default to false
 }: TestCaseFormProps) => {
   const { toast } = useToast();
   const [state, dispatch] = useReducer(formReducer, {
@@ -150,15 +204,75 @@ const TestCaseForm = ({
     tags: testCase?.tags?.map(tag => tag.name) || initialFormState.tags
   });
 
+  const navigate = useNavigate();
+
+  // Add state to track editing mode
+  const [isViewMode, setIsViewMode] = useState(viewOnly);
+
+  // Reset view mode when the dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      setIsViewMode(viewOnly);
+    }
+  }, [isOpen, viewOnly]);
+
+  // Add states for tag autocomplete
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
+
+  // Add state for delete confirmation
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+
   // Memoized features state
   const [features, setFeatures] = React.useState<Array<{ id: string; name: string }>>([]);
 
+  // Fetch steps for a test case - MOVE THIS FUNCTION UP before it's used in useEffect
+  const fetchTestSteps = useCallback(async (testCaseId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("test_steps")
+        .select("*")
+        .eq("test_case_id", testCaseId)
+        .order("step_number");
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        dispatch({ type: 'SET_STEPS', payload: data });
+      }
+    } catch (error) {
+      console.error("Error fetching test steps:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load test steps",
+        variant: "destructive",
+      });
+    }
+  }, []);
+
   // Reset the form when testCase prop changes
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && testCase) {
+      console.log("Setting test case in form:", testCase);
+
+      // Better debug logging for tags
+      if (testCase.tags) {
+        console.log("Raw tags in test case:", JSON.stringify(testCase.tags));
+
+        // Log the structure of the first tag if exists
+        if (Array.isArray(testCase.tags) && testCase.tags.length > 0) {
+          console.log("First tag structure:", JSON.stringify(testCase.tags[0]));
+        }
+      } else {
+        console.warn("No tags in test case");
+      }
+
+      // Create a clean copy to avoid any reference issues
+      const testCaseCopy = JSON.parse(JSON.stringify(testCase));
+
       dispatch({
         type: 'RESET_FORM',
-        payload: testCase || initialFormState.formData
+        payload: testCaseCopy || initialFormState.formData
       });
 
       // Only fetch steps if needed and we have a test case ID
@@ -166,7 +280,7 @@ const TestCaseForm = ({
         fetchTestSteps(testCase.id);
       }
     }
-  }, [testCase?.id, isOpen]);
+  }, [testCase?.id, isOpen, fetchTestSteps]);
 
   // Memoize expensive operations
   const featuresCache = useMemo(() => {
@@ -200,28 +314,19 @@ const TestCaseForm = ({
     loadFeatures();
   }, []);
 
-  // Fetch steps for a test case
-  const fetchTestSteps = useCallback(async (testCaseId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("test_steps")
-        .select("*")
-        .eq("test_case_id", testCaseId)
-        .order("step_number");
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        dispatch({ type: 'SET_STEPS', payload: data });
+  // Load tags from the database
+  useEffect(() => {
+    const loadTags = async () => {
+      try {
+        const tagsData = await getTags();
+        // Extract unique tag names
+        setAvailableTags(tagsData.map(tag => tag.name).filter((v, i, a) => a.indexOf(v) === i));
+      } catch (error) {
+        console.error("Error loading tags:", error);
       }
-    } catch (error) {
-      console.error("Error fetching test steps:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load test steps",
-        variant: "destructive",
-      });
-    }
+    };
+
+    loadTags();
   }, []);
 
   // Debounced handlers for input changes
@@ -350,9 +455,56 @@ const TestCaseForm = ({
     }
   }, [state, testCase?.id, isEditing, onSubmit, onClose]);
 
+  // Add a function to handle test case deletion
+  const handleDeleteTestCase = async () => {
+    if (!testCase?.id) return;
+
+    try {
+      await deleteTestCase(testCase.id);
+
+      toast({
+        title: "Test Case Deleted",
+        description: "Test case has been successfully deleted",
+      });
+
+      onClose();
+      // Inform the parent component about deletion
+      onSubmit({ id: testCase.id, deleted: true } as any);
+    } catch (error) {
+      console.error("Error deleting test case:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete test case",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Add a function to handle expanding to full view
+  const handleExpandView = () => {
+    if (testCase?.id) {
+      onClose();
+      navigate(`/test-cases/${testCase.id}`);
+    }
+  };
+
   // Memoized StepItem component
   const StepItem = React.memo(({ index, style }: { index: number, style: React.CSSProperties }) => {
     const step = state.steps[index];
+    // Track input values locally to maintain cursor position
+    const [descValue, setDescValue] = useState(step.description);
+    const [expValue, setExpValue] = useState(step.expected_result);
+
+    // Update local state when step changes
+    useEffect(() => {
+      setDescValue(step.description);
+      setExpValue(step.expected_result);
+    }, [step]);
+
+    // Only update parent state when focus is lost
+    const handleBlur = (field: string, value: string) => {
+      handleStepChange(index, field, value);
+    };
 
     return (
       <div style={style}>
@@ -361,15 +513,17 @@ const TestCaseForm = ({
             <h4 className="text-sm font-medium">
               Step {step.step_number}
             </h4>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => dispatch({ type: 'REMOVE_STEP', index })}
-              className="h-8 w-8 p-0"
-            >
-              <Trash2 className="h-4 w-4 text-red-500" />
-            </Button>
+            {!isViewMode && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => dispatch({ type: 'REMOVE_STEP', index })}
+                className="h-8 w-8 p-0"
+              >
+                <Trash2 className="h-4 w-4 text-red-500" />
+              </Button>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -378,28 +532,29 @@ const TestCaseForm = ({
             </Label>
             <Textarea
               id={`step-${index}-desc`}
-              defaultValue={step.description}
-              onChange={(e) => handleStepChange(index, "description", e.target.value)}
+              value={descValue}
+              onChange={(e) => setDescValue(e.target.value)}
+              onBlur={(e) => handleBlur("description", e.target.value)}
               placeholder="What to do in this step"
               rows={2}
               className="resize-none"
+              readOnly={isViewMode}
             />
           </div>
 
           <div className="space-y-2">
-            <Label
-              htmlFor={`step-${index}-expected`}
-              className="text-xs"
-            >
+            <Label htmlFor={`step-${index}-expected`} className="text-xs">
               Expected Result
             </Label>
             <Textarea
               id={`step-${index}-expected`}
-              defaultValue={step.expected_result}
-              onChange={(e) => handleStepChange(index, "expected_result", e.target.value)}
+              value={expValue}
+              onChange={(e) => setExpValue(e.target.value)}
+              onBlur={(e) => handleBlur("expected_result", e.target.value)}
               placeholder="What should happen when this step is executed"
               rows={2}
               className="resize-none"
+              readOnly={isViewMode}
             />
           </div>
         </div>
@@ -417,13 +572,15 @@ const TestCaseForm = ({
           className="px-2 py-1 gap-1"
         >
           {tag}
-          <button
-            type="button"
-            onClick={() => dispatch({ type: 'REMOVE_TAG', tag })}
-            className="ml-1 text-gray-500 hover:text-gray-700"
-          >
-            ×
-          </button>
+          {!isViewMode && (
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'REMOVE_TAG', tag })}
+              className="ml-1 text-gray-500 hover:text-gray-700"
+            >
+              ×
+            </button>
+          )}
         </Badge>
       ))}
       {state.tags.length === 0 && (
@@ -432,252 +589,359 @@ const TestCaseForm = ({
     </div>
   ));
 
+  // Filter tags for autocomplete based on input
+  const filteredTags = state.newTag
+    ? availableTags.filter(tag =>
+        tag.toLowerCase().includes(state.newTag.toLowerCase()) &&
+        !state.tags.includes(tag))
+    : availableTags.filter(tag => !state.tags.includes(tag));
+
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>
-            {isEditing ? "Edit Test Case" : "Create New Test Case"}
-          </DialogTitle>
-          <DialogDescription>
-            {isEditing
-              ? "Update the test case details."
-              : "Add a new test case to your repository."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4 py-4 overflow-y-auto pr-2 max-h-[calc(90vh-180px)]">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="feature">Feature</Label>
-              <Select
-                value={state.formData.feature_id}
-                onValueChange={(value) => dispatch({ type: 'UPDATE_FIELD', field: 'feature_id', value })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a feature" />
-                </SelectTrigger>
-                <SelectContent>
-                  {features.map((feature) => (
-                    <SelectItem key={feature.id} value={feature.id}>
-                      {feature.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+    <>
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden">
+          <DialogHeader className="relative pb-2">
+            <div className="flex justify-between items-center pr-6">
+              <DialogTitle>
+                {isEditing && !isViewMode ? "Edit Test Case" : isViewMode ? "View Test Case" : "Create New Test Case"}
+              </DialogTitle>
+              <div className="flex space-x-2">
+                {/* Show Expand button if viewing an existing test case */}
+                {isEditing && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExpandView}
+                    type="button"
+                  >
+                    <Expand className="h-4 w-4 mr-2" />
+                    Expand View
+                  </Button>
+                )}
+                {/* Show Edit button in view mode */}
+                {isViewMode && isEditing && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsViewMode(false)}
+                    type="button"
+                  >
+                    Edit
+                  </Button>
+                )}
+                {/* Show Delete button only in edit mode */}
+                {isEditing && !isViewMode && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    tabIndex={0}
+                    onClick={() => setIsDeleteDialogOpen(true)}
+                    type="button"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </Button>
+                )}
+              </div>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="status">Status</Label>
-              <Select
-                value={state.formData.status}
-                onValueChange={(value) =>
-                  dispatch({
-                    type: 'UPDATE_FIELD',
-                    field: 'status',
-                    value: value as TestCaseStatus
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="draft">Draft</SelectItem>
-                  <SelectItem value="ready">Ready</SelectItem>
-                  <SelectItem value="deprecated">Deprecated</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="title">Title</Label>
-            <Input
-              id="title"
-              defaultValue={state.formData.title || ""}
-              onChange={(e) => handleFieldChange("title", e.target.value)}
-              placeholder="Enter test case title"
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="description">Description</Label>
-            <Textarea
-              id="description"
-              defaultValue={state.formData.description || ""}
-              onChange={(e) => handleFieldChange("description", e.target.value)}
-              placeholder="Enter test case description"
-              rows={3}
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <div className="flex justify-between items-center">
-              <Label>Test Steps</Label>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => dispatch({ type: 'ADD_STEP' })}
-                className="flex items-center gap-1"
-              >
-                <Plus className="h-4 w-4" /> Add Step
-              </Button>
-            </div>
-
-            <div className="border border-gray-100 rounded-lg">
-              {state.steps.length > 0 ? (
-                <FixedSizeList
-                  height={300}
-                  itemCount={state.steps.length}
-                  itemSize={220}
-                  width="100%"
+            <DialogDescription>
+              {isEditing && !isViewMode
+                ? "Update the test case details."
+                : isViewMode
+                ? "View test case details."
+                : "Add a new test case to your repository."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4 overflow-y-auto pr-2 max-h-[calc(90vh-180px)]">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="feature">Feature</Label>
+                <Select
+                  value={state.formData.feature_id}
+                  onValueChange={(value) => dispatch({ type: 'UPDATE_FIELD', field: 'feature_id', value })}
+                  disabled={isViewMode}
                 >
-                  {StepItem}
-                </FixedSizeList>
-              ) : (
-                <div className="text-center py-4 text-gray-500">
-                  No steps added yet. Click "Add Step" to add test steps.
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a feature" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {features.map((feature) => (
+                      <SelectItem key={feature.id} value={feature.id}>
+                        {feature.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="status">Status</Label>
+                <Select
+                  value={state.formData.status}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: 'UPDATE_FIELD',
+                      field: 'status',
+                      value: value as TestCaseStatus
+                    })
+                  }
+                  disabled={isViewMode}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="ready">Ready</SelectItem>
+                    <SelectItem value="deprecated">Deprecated</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="title">Title</Label>
+              <Input
+                id="title"
+                defaultValue={state.formData.title || ""}
+                onChange={(e) => handleFieldChange("title", e.target.value)}
+                placeholder="Enter test case title"
+                readOnly={isViewMode}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="description">Description</Label>
+              <Textarea
+                id="description"
+                defaultValue={state.formData.description || ""}
+                onChange={(e) => handleFieldChange("description", e.target.value)}
+                placeholder="Enter test case description"
+                rows={3}
+                readOnly={isViewMode}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <div className="flex justify-between items-center">
+                <Label>Test Steps</Label>
+                {!isViewMode && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => dispatch({ type: 'ADD_STEP' })}
+                    className="flex items-center gap-1"
+                  >
+                    <Plus className="h-4 w-4" /> Add Step
+                  </Button>
+                )}
+              </div>
+
+              <div className="border border-gray-100 rounded-lg">
+                {state.steps.length > 0 ? (
+                  <FixedSizeList
+                    height={300}
+                    itemCount={state.steps.length}
+                    itemSize={280} // Increase from 220 to 280 to prevent overlapping
+                    width="100%"
+                  >
+                    {StepItem}
+                  </FixedSizeList>
+                ) : (
+                  <div className="text-center py-4 text-gray-500">
+                    No steps added yet. Click "Add Step" to add test steps.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Rest of form fields */}
+            <div className="grid gap-2">
+              <Label htmlFor="preconditions">Preconditions</Label>
+              <Textarea
+                id="preconditions"
+                defaultValue={state.formData.preconditions || ""}
+                onChange={(e) => handleFieldChange("preconditions", e.target.value)}
+                placeholder="Enter test case preconditions"
+                rows={2}
+                readOnly={isViewMode}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="type">Test Type</Label>
+                <Select
+                  value={state.formData.test_type}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: 'UPDATE_FIELD',
+                      field: 'test_type',
+                      value: value as TestType
+                    })
+                  }
+                  disabled={isViewMode}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select test type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="automated">Automated</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="priority">Priority</Label>
+                <Select
+                  value={state.formData.priority}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: 'UPDATE_FIELD',
+                      field: 'priority',
+                      value: value as TestCasePriority
+                    })
+                  }
+                  disabled={isViewMode}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select priority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="critical">Critical</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="category">Category</Label>
+              <Select
+                value={state.formData.category as string}
+                onValueChange={(value) => dispatch({ type: 'UPDATE_FIELD', field: 'category', value })}
+                disabled={isViewMode}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="smoke">Smoke</SelectItem>
+                  <SelectItem value="regression">Regression</SelectItem>
+                  <SelectItem value="functional">Functional</SelectItem>
+                  <SelectItem value="performance">Performance</SelectItem>
+                  <SelectItem value="security">Security</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="attachments">Attachments (Drive Links)</Label>
+              <Textarea
+                id="attachments"
+                defaultValue={state.formData.attachments || ""}
+                onChange={(e) => handleFieldChange("attachments", e.target.value)}
+                placeholder="Enter Google Drive links to datasheets, logs, waveforms, etc. (one per line)"
+                rows={2}
+                readOnly={isViewMode}
+              />
+              <p className="text-xs text-gray-500">
+                Add links to relevant files such as datasheets, logs, or waveforms
+              </p>
+            </div>
+
+            {/* Replace the tags input section with autocomplete */}
+            <div className="grid gap-2">
+              <Label htmlFor="tags">Tags</Label>
+              <TagList />
+              {!isViewMode && (
+                <div className="flex gap-2">
+                  <div className="flex-1 relative">
+                    <Input
+                      id="newTag"
+                      value={state.newTag || ''}
+                      onChange={(e) => dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: e.target.value })}
+                      placeholder="Add a tag"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          if (state.newTag?.trim() && !state.tags.includes(state.newTag.trim())) {
+                            dispatch({ type: 'ADD_TAG', tag: state.newTag.trim() });
+                            dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: '' });
+                          }
+                        }
+                      }}
+                    />
+                    {state.newTag && filteredTags.length > 0 && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg max-h-60 overflow-auto">
+                        {filteredTags.map((tag) => (
+                          <div
+                            key={tag}
+                            className="px-3 py-2 cursor-pointer hover:bg-gray-100"
+                            onClick={() => {
+                              dispatch({ type: 'ADD_TAG', tag });
+                              dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: '' });
+                            }}
+                          >
+                            {tag}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      if (state.newTag?.trim() && !state.tags.includes(state.newTag.trim())) {
+                        dispatch({ type: 'ADD_TAG', tag: state.newTag.trim() });
+                        dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: '' });
+                      }
+                    }}
+                  >
+                    Add
+                  </Button>
                 </div>
               )}
             </div>
           </div>
-
-          {/* Rest of form fields */}
-          <div className="grid gap-2">
-            <Label htmlFor="preconditions">Preconditions</Label>
-            <Textarea
-              id="preconditions"
-              defaultValue={state.formData.preconditions || ""}
-              onChange={(e) => handleFieldChange("preconditions", e.target.value)}
-              placeholder="Enter test case preconditions"
-              rows={2}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="type">Test Type</Label>
-              <Select
-                value={state.formData.test_type}
-                onValueChange={(value) =>
-                  dispatch({
-                    type: 'UPDATE_FIELD',
-                    field: 'test_type',
-                    value: value as TestType
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select test type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="automated">Automated</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="priority">Priority</Label>
-              <Select
-                value={state.formData.priority}
-                onValueChange={(value) =>
-                  dispatch({
-                    type: 'UPDATE_FIELD',
-                    field: 'priority',
-                    value: value as TestCasePriority
-                  })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select priority" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="critical">Critical</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="category">Category</Label>
-            <Select
-              value={state.formData.category as string}
-              onValueChange={(value) => dispatch({ type: 'UPDATE_FIELD', field: 'category', value })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select category" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="smoke">Smoke</SelectItem>
-                <SelectItem value="regression">Regression</SelectItem>
-                <SelectItem value="functional">Functional</SelectItem>
-                <SelectItem value="performance">Performance</SelectItem>
-                <SelectItem value="security">Security</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="attachments">Attachments (Drive Links)</Label>
-            <Textarea
-              id="attachments"
-              defaultValue={state.formData.attachments || ""}
-              onChange={(e) => handleFieldChange("attachments", e.target.value)}
-              placeholder="Enter Google Drive links to datasheets, logs, waveforms, etc. (one per line)"
-              rows={2}
-            />
-            <p className="text-xs text-gray-500">
-              Add links to relevant files such as datasheets, logs, or waveforms
-            </p>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="tags">Tags</Label>
-            <TagList />
-            <div className="flex gap-2">
-              <Input
-                id="newTag"
-                value={state.newTag}
-                onChange={(e) => dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: e.target.value })}
-                placeholder="Add a tag"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    if (state.newTag.trim() && !state.tags.includes(state.newTag.trim())) {
-                      dispatch({ type: 'ADD_TAG', tag: state.newTag.trim() });
-                      dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: '' });
-                    }
-                  }
-                }}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  if (state.newTag.trim() && !state.tags.includes(state.newTag.trim())) {
-                    dispatch({ type: 'ADD_TAG', tag: state.newTag.trim() });
-                    dispatch({ type: 'UPDATE_FIELD', field: 'newTag', value: '' });
-                  }
-                }}
-              >
-                Add
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>
+              {isViewMode ? "Close" : "Cancel"}
+            </Button>
+            {!isViewMode && (
+              <Button onClick={handleSubmit}>
+                {isEditing ? "Update Test Case" : "Create Test Case"}
               </Button>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit}>
-            {isEditing ? "Update Test Case" : "Create Test Case"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the test case and all associated data.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteTestCase}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 };
 

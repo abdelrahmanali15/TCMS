@@ -102,6 +102,22 @@ export const getFeaturesByModuleId = async (
   return data || [];
 };
 
+// Add the missing getFeatures function
+export const getFeatures = async (): Promise<Array<{id: string, name: string}>> => {
+  try {
+    const { data, error } = await supabase
+      .from("features")
+      .select("id, name")
+      .order("name");
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error loading features:", error);
+    return [];
+  }
+};
+
 // Test Cases API
 export const getTestCasesByFeatureId = async (
   featureId: string,
@@ -239,6 +255,24 @@ export const updateTestCase = async (id: string, testCase: Partial<TestCase>) =>
 };
 
 /**
+ * Deletes a test case and all related data
+ */
+export const deleteTestCase = async (id: string): Promise<void> => {
+  try {
+    // Delete test case - cascading will handle steps and tags
+    const { error } = await supabase
+      .from("test_cases")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error("Error deleting test case:", error);
+    throw error;
+  }
+};
+
+/**
  * Helper function to manage tag associations for a test case
  */
 async function handleTagsForTestCase(testCaseId: string, tags: Array<{name: string}>): Promise<void> {
@@ -249,34 +283,64 @@ async function handleTagsForTestCase(testCaseId: string, tags: Array<{name: stri
       .delete()
       .eq("test_case_id", testCaseId);
 
-    if (deleteError) throw deleteError;
+    if (deleteError) {
+      console.error("Error deleting existing tag associations:", deleteError);
+      throw deleteError;
+    }
+
+    // Skip if no tags to add
+    if (!tags || tags.length === 0) return;
+
+    console.log("Processing tags for test case:", testCaseId, tags);
 
     // Process each tag
     for (const tag of tags) {
+      if (!tag.name || !tag.name.trim()) {
+        console.warn("Skipping empty tag name");
+        continue; // Skip empty tag names
+      }
+
+      const tagName = tag.name.trim();
+
       // Check if the tag already exists
       const { data: existingTag, error: tagError } = await supabase
         .from("tags")
         .select("id")
-        .eq("name", tag.name)
+        .eq("name", tagName)
         .maybeSingle();
 
-      if (tagError) throw tagError;
+      if (tagError) {
+        console.error("Error checking for existing tag:", tagError);
+        throw tagError;
+      }
 
       let tagId;
 
       // If tag doesn't exist, create it
       if (!existingTag) {
+        console.log("Creating new tag:", tagName);
         const { data: newTag, error: createError } = await supabase
           .from("tags")
-          .insert({ name: tag.name })
+          .insert({ name: tagName })
           .select("id")
           .single();
 
-        if (createError) throw createError;
+        if (createError) {
+          console.error("Error creating tag:", createError);
+          throw createError;
+        }
+
+        if (!newTag) {
+          console.error("Failed to create tag - no data returned");
+          continue;
+        }
+
         tagId = newTag.id;
       } else {
         tagId = existingTag.id;
       }
+
+      console.log("Creating link between test case and tag:", testCaseId, tagId);
 
       // Create the association between test case and tag
       const { error: linkError } = await supabase
@@ -286,8 +350,13 @@ async function handleTagsForTestCase(testCaseId: string, tags: Array<{name: stri
           tag_id: tagId
         });
 
-      if (linkError) throw linkError;
+      if (linkError) {
+        console.error("Error linking tag to test case:", linkError);
+        throw linkError;
+      }
     }
+
+    console.log("Successfully processed all tags for test case:", testCaseId);
   } catch (error) {
     console.error("Error handling tags for test case:", error);
     throw error;
@@ -824,21 +893,61 @@ export const getTestCasesWithSteps = async (options: {
   search?: string;
   testType?: string;
   featureId?: string;
+  priority?: string;
+  tagIds?: string[];
+  status?: string;
 }): Promise<TestCase[]> => {
   try {
-    const { limit = 100, offset = 0, search, testType, featureId } = options;
+    const { limit = 100, offset = 0, search, testType, featureId, priority, tagIds, status } = options;
 
+    // If we have tag filters, use a more complex query
+    if (tagIds && tagIds.length > 0) {
+      let query = supabase
+        .from('test_cases')
+        .select('*, features(name), test_case_tags!inner(tag_id)')
+        .in('test_case_tags.tag_id', tagIds);
+
+      // Add other filters
+      if (featureId) query = query.eq('feature_id', featureId);
+      if (testType) query = query.eq('test_type', testType);
+      if (priority) query = query.eq('priority', priority);
+      if (status) query = query.eq('status', status);
+      if (search) query = query.ilike('title', `%${search}%`);
+
+      // Get data with pagination
+      query = query.range(offset, offset + limit - 1)
+                  .order('created_at', { ascending: false });
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      // Fetch steps for each test case
+      const testCasesWithSteps = await Promise.all((data || []).map(async (tc) => {
+        const { data: steps } = await supabase
+          .from('test_steps')
+          .select('*')
+          .eq('test_case_id', tc.id)
+          .order('step_number');
+
+        return { ...tc, steps: steps || [] };
+      }));
+
+      return testCasesWithSteps;
+    }
+
+    // If no tags filter, use our RPC function
     const { data, error } = await supabase.rpc('get_all_test_cases_with_steps', {
       p_limit: limit,
       p_offset: offset,
       p_search: search || null,
       p_test_type: testType || null,
-      p_feature_id: featureId || null
+      p_feature_id: featureId || null,
+      p_priority: priority || null,
+      p_status: status || null
     });
 
     if (error) throw error;
-
-    // Data is already in the correct format from our function
     return data || [];
   } catch (error) {
     console.error("Error fetching test cases with steps:", error);
@@ -857,13 +966,49 @@ export const getTestCaseWithSteps = async (testCaseId: string): Promise<TestCase
 
     if (error) throw error;
 
-    // Combine the test case with its steps from the function result
-    const testCase = data.test_case;
-    testCase.steps = data.steps || [];
+    // The updated SQL function now returns the complete test case with steps and tags
+    // Make sure tags is always an array, even when null or undefined
+    console.log("Raw test case data:", data);
 
-    return testCase;
+    if (!data.tags) {
+      console.warn("No tags returned from database for test case:", testCaseId);
+      data.tags = [];
+    }
+
+    // Add additional logging to help diagnose tag structure
+    if (data.tags) {
+      console.log("Tags data structure:", JSON.stringify(data.tags));
+    }
+
+    return data;
   } catch (error) {
     console.error("Error fetching test case with steps:", error);
     throw error;
+  }
+};
+
+// New helper function to get tags with their counts
+export const getTagsWithCounts = async (): Promise<Array<{id: string, name: string, count: number}>> => {
+  try {
+    const { data, error } = await supabase.rpc('get_tags_with_counts');
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching tags with counts:", error);
+    return [];
+  }
+};
+
+// Get features with test case counts
+export const getFeaturesWithCounts = async (): Promise<Array<{id: string, name: string, count: number}>> => {
+  try {
+    const { data, error } = await supabase.rpc('get_features_with_counts');
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching features with counts:", error);
+    return [];
   }
 };

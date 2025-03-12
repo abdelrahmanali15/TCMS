@@ -19,6 +19,7 @@ import BugsPage from "./components/tcms/bugs/BugsPage";
 import ReportsPage from "./components/tcms/reports/ReportsPage";
 import SettingsPage from "./components/tcms/settings/SettingsPage";
 import HelpPage from "./components/tcms/help/HelpPage";
+import TestCaseExpandedView from "./components/tcms/test-cases/TestCaseExpandedView";
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -117,6 +118,8 @@ function AppRoutes() {
             </PrivateRoute>
           }
         />
+        <Route path="/test-cases/:id" element={<TestCaseExpandedView />} />} />
+        <Route path="/test-cases" element={<Navigate to="/tcms/test-cases" replace />} />
       </Routes>
       {import.meta.env.VITE_TEMPO === "true" && useRoutes(routes)}
     </>
