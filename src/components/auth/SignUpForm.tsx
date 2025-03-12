@@ -72,15 +72,15 @@ export default function SignUpForm() {
             <p className="text-xs text-gray-500 mt-1">Password must be at least 8 characters</p>
           </div>
           {error && <p className="text-sm text-red-500">{error}</p>}
-          
-          <Button 
-            type="submit" 
+
+          <Button
+            type="submit"
             className="w-full h-12 rounded-full bg-black text-white hover:bg-gray-800 text-sm font-medium"
           >
             Create account
           </Button>
-          
-          
+
+
           <div className="text-xs text-center text-gray-500 mt-6">
             By creating an account, you agree to our{" "}
             <Link to="/" className="text-blue-600 hover:underline">
@@ -91,7 +91,7 @@ export default function SignUpForm() {
               Privacy Policy
             </Link>
           </div>
-          
+
           <div className="text-sm text-center text-gray-600 mt-6">
             Already have an account?{" "}
             <Link to="/login" className="text-blue-600 hover:underline font-medium">

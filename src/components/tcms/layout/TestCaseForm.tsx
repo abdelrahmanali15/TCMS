@@ -41,32 +41,73 @@ const TestCaseForm = ({
   isEditing = false,
 }: TestCaseFormProps) => {
   const { toast } = useToast();
-  const [form, setForm] = useState<Partial<TestCase>>(
-    testCase || {
-      title: "",
-      description: "",
-      preconditions: "",
-      test_type: "manual",
-      priority: "medium",
-      status: "draft",
-      feature_id: "", // This would typically be selected from a dropdown
-      category: "functional", // Default category
-      attachments: "", // For Drive links
-    },
-  );
-
+  const defaultState = {
+    title: "",
+    description: "",
+    preconditions: "",
+    test_type: "manual",
+    priority: "medium",
+    status: "draft",
+    feature_id: "",
+    category: "functional",
+    attachments: "",
+  };
+  const [form, setForm] = useState<Partial<TestCase>>(testCase || defaultState);
   const [steps, setSteps] = useState<
     Array<{ step_number: number; description: string; expected_result: string }>
-  >(
-    testCase?.steps || [
-      { step_number: 1, description: "", expected_result: "" },
-    ],
-  );
-
-  const [tags, setTags] = useState<string[]>(
-    testCase?.tags?.map((tag) => tag.name) || [],
-  );
+  >(testCase?.steps || [{ step_number: 1, description: "", expected_result: "" }]);
+  const [tags, setTags] = useState<string[]>(testCase?.tags?.map((tag) => tag.name) || []);
   const [newTag, setNewTag] = useState("");
+
+  // Refresh local state when the testCase prop changes
+  useEffect(() => {
+    // Only update form and tags on testCase change
+    setForm(testCase || defaultState);
+    setTags(testCase?.tags?.map(tag => tag.name) || []);
+
+    // Only update steps if the new testCase provides steps;
+    // otherwise, keep the current steps (so manually added steps are not deleted)
+    if (testCase?.id && Array.isArray(testCase.steps) && testCase.steps.length > 0) {
+      setSteps(testCase.steps);
+    }
+  }, [testCase?.id]);
+
+  // Add this useEffect to fetch test steps if not already loaded
+  useEffect(() => {
+    const fetchTestSteps = async () => {
+      // Only fetch steps if we have a test case but no steps
+      if (testCase?.id && (!testCase.steps || testCase.steps.length === 0)) {
+        try {
+          const { data, error } = await supabase
+            .from("test_steps")
+            .select("*")
+            .eq("test_case_id", testCase.id)
+            .order("step_number");
+
+          if (error) throw error;
+
+          if (data && data.length > 0) {
+            // Update the steps state
+            setSteps(data);
+            // Also update the form state to include steps
+            setForm(prevForm => ({
+              ...prevForm,
+              steps: data
+            }));
+          }
+        } catch (error) {
+          console.error("Error fetching test steps:", error);
+          toast({
+            title: "Error",
+            description: "Failed to load test steps",
+            variant: "destructive",
+          });
+        }
+      }
+    };
+
+    fetchTestSteps();
+  }, [testCase?.id]);
 
   // State to store features from the database
   const [features, setFeatures] = useState<Array<{ id: string; name: string }>>(
@@ -151,22 +192,31 @@ const TestCaseForm = ({
     }
 
     try {
-      // Prepare the complete test case object
-      const completeTestCase = {
-        ...form,
-        steps,
-        tags: tags.map((name) => ({ name })),
-      };
+      // Exclude properties not in the test_cases table
+      const { created_by, updated_by, tags: _tags, ...payload } = form;
 
-      // Save to database
+      // Include steps in the payload for API functions to handle
+      payload.steps = steps;
+
       if (isEditing && testCase?.id) {
-        await updateTestCase(testCase.id, completeTestCase);
+        const result = await updateTestCase(testCase.id, payload);
+        // Check for a conflict response (assuming updateTestCase throws an error or returns a result with statusCode)
+        if (result && result.statusCode === 409) {
+          // Option 1: Refetch latest resource and notify the user
+          // Alternatively, prompt user to refresh data to resolve conflicts.
+          toast({
+            title: "Conflict Detected",
+            description:
+              "The test case has been updated elsewhere. Please refresh and try again.",
+            variant: "destructive",
+          });
+          return;
+        }
       } else {
-        await createTestCase(completeTestCase);
+        await createTestCase(payload);
       }
 
-      // Submit the form with steps and tags
-      onSubmit(completeTestCase);
+      onSubmit(payload);
       onClose();
 
       toast({
@@ -175,13 +225,23 @@ const TestCaseForm = ({
           ? "Test case has been successfully updated"
           : "Test case has been successfully created",
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving test case:", error);
-      toast({
-        title: "Error",
-        description: `Failed to ${isEditing ? "update" : "create"} test case`,
-        variant: "destructive",
-      });
+      // If the error message contains a 409 conflict, notify the user specifically.
+      if (error.status === 409 || error.message.includes("409")) {
+        toast({
+          title: "Conflict Error",
+          description:
+            "Update failed due to a conflict. Ensure you have the latest data and try again.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: `Failed to ${isEditing ? "update" : "create"} test case`,
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -284,7 +344,7 @@ const TestCaseForm = ({
             <Label htmlFor="title">Title</Label>
             <Input
               id="title"
-              value={form.title}
+              value={form.title || ""}
               onChange={(e) => handleChange("title", e.target.value)}
               placeholder="Enter test case title"
             />
@@ -294,7 +354,7 @@ const TestCaseForm = ({
             <Label htmlFor="description">Description</Label>
             <Textarea
               id="description"
-              value={form.description}
+              value={form.description || ""}
               onChange={(e) => handleChange("description", e.target.value)}
               placeholder="Enter test case description"
               rows={3}
@@ -385,7 +445,7 @@ const TestCaseForm = ({
             <Label htmlFor="preconditions">Preconditions</Label>
             <Textarea
               id="preconditions"
-              value={form.preconditions}
+              value={form.preconditions || ""}
               onChange={(e) => handleChange("preconditions", e.target.value)}
               placeholder="Enter test case preconditions"
               rows={2}
@@ -454,7 +514,7 @@ const TestCaseForm = ({
             <Label htmlFor="attachments">Attachments (Drive Links)</Label>
             <Textarea
               id="attachments"
-              value={form.attachments as string}
+              value={form.attachments || ""}
               onChange={(e) => handleChange("attachments", e.target.value)}
               placeholder="Enter Google Drive links to datasheets, logs, waveforms, etc. (one per line)"
               rows={2}

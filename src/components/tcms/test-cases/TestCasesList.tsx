@@ -42,73 +42,7 @@ const TestCasesList = ({
     status: "all",
   });
 
-  // Mock data for initial development
-  const mockTestCases: TestCase[] = [
-    {
-      id: "1",
-      feature_id: "feature1",
-      title: "Verify CPU core frequency scaling",
-      description: "Test that CPU cores can scale frequency based on workload",
-      test_type: "manual",
-      priority: "high",
-      status: "ready",
-      created_at: "2024-06-15T10:30:00Z",
-      updated_at: "2024-07-10T14:45:00Z",
-      created_by: "user1",
-    },
-    {
-      id: "2",
-      feature_id: "feature1",
-      title: "Verify memory controller bandwidth",
-      description:
-        "Test memory controller achieves expected bandwidth under load",
-      test_type: "automated",
-      priority: "critical",
-      status: "ready",
-      created_at: "2024-06-16T11:20:00Z",
-      updated_at: "2024-07-11T09:30:00Z",
-      created_by: "user2",
-    },
-    {
-      id: "3",
-      feature_id: "feature2",
-      title: "Verify PCIe link training",
-      description: "Test PCIe link successfully trains at Gen5 speeds",
-      test_type: "automated",
-      priority: "high",
-      status: "draft",
-      created_at: "2024-06-17T14:15:00Z",
-      updated_at: "2024-07-09T16:40:00Z",
-      created_by: "user1",
-    },
-    {
-      id: "4",
-      feature_id: "feature2",
-      title: "Verify power state transitions",
-      description: "Test all power state transitions work correctly",
-      test_type: "manual",
-      priority: "medium",
-      status: "ready",
-      created_at: "2024-06-18T09:45:00Z",
-      updated_at: "2024-07-12T11:20:00Z",
-      created_by: "user3",
-    },
-    {
-      id: "5",
-      feature_id: "feature3",
-      title: "Verify thermal throttling",
-      description:
-        "Test CPU throttles correctly when temperature threshold is reached",
-      test_type: "automated",
-      priority: "critical",
-      status: "ready",
-      created_at: "2024-06-19T13:30:00Z",
-      updated_at: "2024-07-10T10:15:00Z",
-      created_by: "user2",
-    },
-  ];
-
-  // We're now using the testCases prop passed from the parent component
+  // Remove mock data as we're using the testCases prop passed from the parent component
 
   // Filter test cases based on search query and filters
   const filteredTestCases = testCases.filter((testCase) => {
@@ -198,9 +132,12 @@ const TestCasesList = ({
           <div className="flex flex-col md:flex-row gap-4 mb-6">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+              {/* Added value and onChange to control the input */}
               <Input
                 placeholder="Search test cases..."
                 className="pl-9 h-10 bg-gray-50 border-gray-200"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
             <div className="flex gap-2">

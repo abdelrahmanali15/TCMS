@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,45 +12,97 @@ interface TestStep {
   expected_result: string;
 }
 
+interface StepResult {
+  test_step_id: string;
+  status: string;
+  notes: string;
+}
+
 interface TestStepExecutionProps {
   testCase: {
     id: string;
     title: string;
-    description: string;
-    feature: string;
-    priority: string;
+    description?: string; // Make optional to avoid crashes
+    feature?: string;
+    priority?: string;
   };
-  steps?: TestStep[]; // Optional to prevent errors if undefined
-  onComplete: (results: { status: string; notes: string }) => void;
+  steps: TestStep[];
+  onComplete: (results: {
+    status: string;
+    notes: string;
+    stepResults: StepResult[]
+  }) => void;
   onReportBug: () => void;
 }
 
 const TestStepExecution = ({
   testCase,
-  steps = [], // Default to an empty array
+  steps = [], // Provide default empty array
   onComplete,
   onReportBug,
 }: TestStepExecutionProps) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [stepResults, setStepResults] = useState<
-    Array<{ status: string; notes: string }>
-  >(
-    Array.isArray(steps)
-      ? steps.map(() => ({ status: "pending", notes: "" }))
-      : [],
-  );
+  const [stepResults, setStepResults] = useState<StepResult[]>([]);
   const [notes, setNotes] = useState("");
 
+  // Reset state when testCase or steps change
+  useEffect(() => {
+    setCurrentStepIndex(0);
+    // Initialize stepResults with the correct length
+    setStepResults(Array.isArray(steps) ?
+      steps.map(step => ({
+        test_step_id: step.id,
+        status: "pending",
+        notes: ""
+      })) : []);
+    setNotes("");
+  }, [testCase?.id, steps]);
+
+  // Ensure stepResults is always in sync with steps length
+  useEffect(() => {
+    if (Array.isArray(steps) && steps.length !== stepResults.length) {
+      setStepResults(steps.map((step, i) =>
+        stepResults[i] || { test_step_id: step.id, status: "pending", notes: "" }
+      ));
+    }
+  }, [steps, stepResults]);
+
   if (!Array.isArray(steps) || steps.length === 0) {
-    return <p className="text-red-500">No test steps available.</p>;
+    return (
+      <Card className="bg-white/90 backdrop-blur-sm border border-gray-100 rounded-xl shadow-sm overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardTitle className="text-xl font-medium text-gray-900">
+            Test Execution: {getTitle()}
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {getPriorityBadge(getPriority())}
+            <Badge variant="outline">{getFeature()}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p className="text-red-500 text-center py-10">No test steps available for this test case.</p>
+        </CardContent>
+      </Card>
+    );
   }
 
-  const currentStep = steps[currentStepIndex];
+  // Ensure we have a valid current step
+  const currentStep = steps[currentStepIndex] || {
+    step_number: 0,
+    description: "No step defined",
+    expected_result: "No expected result"
+  };
 
   const handleStepResult = (status: string) => {
     const updatedResults = [...stepResults];
-    updatedResults[currentStepIndex] = { status, notes };
-    setStepResults(updatedResults);
+    if (updatedResults[currentStepIndex]) {
+      updatedResults[currentStepIndex] = {
+        ...updatedResults[currentStepIndex],
+        status,
+        notes
+      };
+      setStepResults(updatedResults);
+    }
 
     if (currentStepIndex < steps.length - 1) {
       setCurrentStepIndex(currentStepIndex + 1);
@@ -68,7 +120,12 @@ const TestStepExecution = ({
       if (hasFailure) finalStatus = "failed";
       else if (hasBlocked) finalStatus = "blocked";
 
-      onComplete({ status: finalStatus, notes });
+      // Now pass both the final status and the detailed step results
+      onComplete({
+        status: finalStatus,
+        notes,
+        stepResults: updatedResults
+      });
     }
   };
 
@@ -101,20 +158,26 @@ const TestStepExecution = ({
     }
   };
 
+  // Safe access functions
+  const getTitle = () => testCase?.title || "Untitled Test Case";
+  const getDescription = () => testCase?.description || "No description provided";
+  const getFeature = () => testCase?.feature || "Unknown Feature";
+  const getPriority = () => testCase?.priority || "medium";
+
   return (
     <Card className="bg-white/90 backdrop-blur-sm border border-gray-100 rounded-xl shadow-sm overflow-hidden">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-xl font-medium text-gray-900">
-          Test Execution: {testCase.title}
+          Test Execution: {getTitle()}
         </CardTitle>
         <div className="flex items-center gap-2">
-          {getPriorityBadge(testCase.priority)}
-          <Badge variant="outline">{testCase.feature}</Badge>
+          {getPriorityBadge(getPriority())}
+          <Badge variant="outline">{getFeature()}</Badge>
         </div>
       </CardHeader>
       <CardContent>
         <div className="mb-6">
-          <p className="text-sm text-gray-500 mb-4">{testCase.description}</p>
+          <p className="text-sm text-gray-500 mb-4">{getDescription()}</p>
 
           <div className="flex items-center gap-2 mb-4">
             <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -134,11 +197,12 @@ const TestStepExecution = ({
             <h3 className="font-medium text-gray-900">
               Step {currentStep.step_number}
             </h3>
-            {stepResults[currentStepIndex].status !== "pending" && (
+            {/* Add null check before accessing status property */}
+            {stepResults && stepResults[currentStepIndex] && stepResults[currentStepIndex].status !== "pending" && (
               <div className="flex items-center gap-2">
-                {getStatusIcon(stepResults[currentStepIndex].status)}
+                {getStatusIcon(stepResults[currentStepIndex]?.status || "pending")}
                 <span className="text-sm capitalize">
-                  {stepResults[currentStepIndex].status}
+                  {stepResults[currentStepIndex]?.status || "pending"}
                 </span>
               </div>
             )}

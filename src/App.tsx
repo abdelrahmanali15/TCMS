@@ -28,7 +28,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) {
-    return <Navigate to="/" />;
+    return <Navigate to="/login" />;
   }
 
   return <>{children}</>;
@@ -133,5 +133,11 @@ function App() {
     </AuthProvider>
   );
 }
+
+// function App() {
+//   return (
+//         <AppRoutes />
+//   );
+// }
 
 export default App;

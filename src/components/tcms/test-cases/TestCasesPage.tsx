@@ -4,7 +4,7 @@ import TCMSHeader from "../layout/TCMSHeader";
 import TestCasesList from "./TestCasesList";
 import TestCaseForm from "../layout/TestCaseForm";
 import { TestCase } from "../types";
-import { createTestCase } from "../api";
+import { createTestCase, getTestStepsByTestCaseId } from "../api";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "../../../../supabase/supabase";
 
@@ -51,20 +51,22 @@ const TestCasesPage = () => {
   };
 
   const handleSelectTestCase = async (testCase: TestCase) => {
-    setSelectedTestCase(testCase); // Set the test case first
-    setIsViewDialogOpen(true);
-
     try {
-      const { data: steps, error } = await supabase
-        .from("test_steps") // Make sure this is the correct table
-        .select("*")
-        .eq("test_case_id", testCase.id) // Assuming test_steps has test_case_id column
-        .order("step_number", { ascending: true });
+      // First set the test case to show basic info while we load steps
+      setSelectedTestCase(testCase);
+      setIsViewDialogOpen(true);
 
-      if (error) throw error;
+      // Fetch steps for this test case
+      const steps = await getTestStepsByTestCaseId(testCase.id);
 
-      // Ensure testCase includes steps
-      setSelectedTestCase({ ...testCase, steps: steps || [] });
+      // Update the test case with steps
+      setSelectedTestCase(prevTestCase => {
+        if (!prevTestCase) return testCase;
+        return {
+          ...prevTestCase,
+          steps: steps || []
+        };
+      });
     } catch (error) {
       console.error("Error loading test steps:", error);
       toast({
@@ -84,8 +86,13 @@ const TestCasesPage = () => {
       // Create the test case in the database
       const newTestCase = await createTestCase(testCase);
 
-      // Add the new test case to the list
-      setTestCases([newTestCase, ...testCases]);
+      // Check if this test case already exists in our state
+      const alreadyExists = testCases.some(tc => tc.id === newTestCase.id);
+
+      if (!alreadyExists) {
+        // Only add to state if it's not already there
+        setTestCases([newTestCase, ...testCases]);
+      }
 
       toast({
         title: "Success",

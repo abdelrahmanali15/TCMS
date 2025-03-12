@@ -57,14 +57,14 @@ export default function LoginForm() {
             />
           </div>
           {error && <p className="text-sm text-red-500">{error}</p>}
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             className="w-full h-12 rounded-full bg-black text-white hover:bg-gray-800 text-sm font-medium"
           >
             Sign in
           </Button>
-      
-      
+
+
           <div className="text-sm text-center text-gray-600 mt-6">
             Don't have an account?{" "}
             <Link to="/signup" className="text-blue-600 hover:underline font-medium">

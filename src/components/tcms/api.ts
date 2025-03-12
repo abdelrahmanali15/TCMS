@@ -127,152 +127,105 @@ export const getTestCaseById = async (id: string): Promise<TestCase | null> => {
   return data;
 };
 
-export const createTestCase = async (
-  testCase: Partial<TestCase>,
-): Promise<TestCase> => {
+/**
+ * Creates a test case with steps
+ */
+export const createTestCase = async (testCase: Partial<TestCase>) => {
   try {
-    // Get current user or use a default ID if not logged in
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const userId = user?.id || "00000000-0000-0000-0000-000000000000";
+    // Check if a test case with this title already exists
+    if (testCase.title) {
+      const { data: existingTestCase } = await supabase
+        .from("test_cases")
+        .select("*")
+        .eq("title", testCase.title)
+        .maybeSingle();
 
-    // Get default feature if none provided
-    let featureId = testCase.feature_id;
-    if (!featureId) {
-      // Create a default feature if none exists
-      const { data: features } = await supabase
-        .from("features")
-        .select("id")
-        .limit(1);
-
-      if (!features || features.length === 0) {
-        // Create a default project first
-        const { data: project } = await supabase
-          .from("projects")
-          .insert({ name: "Default Project", created_by: userId })
-          .select()
-          .single();
-
-        // Create a default module
-        const { data: module } = await supabase
-          .from("modules")
-          .insert({ name: "Default Module", project_id: project.id })
-          .select()
-          .single();
-
-        // Create a default feature
-        const { data: feature } = await supabase
-          .from("features")
-          .insert({ name: "Default Feature", module_id: module.id })
-          .select()
-          .single();
-
-        featureId = feature.id;
-      } else {
-        featureId = features[0].id;
+      if (existingTestCase) {
+        console.warn("A test case with this title already exists:", testCase.title);
+        // Return the existing test case to prevent duplication
+        return existingTestCase;
       }
     }
 
+    // Extract steps if present
+    const { steps, ...testCaseData } = testCase;
+
     // First create the test case
-    const { data: testCaseData, error: testCaseError } = await supabase
+    const { data, error } = await supabase
       .from("test_cases")
-      .insert({
-        feature_id: featureId,
-        title: testCase.title || "Untitled Test Case",
-        description: testCase.description || "",
-        preconditions: testCase.preconditions || "",
-        test_type: testCase.test_type || "manual",
-        priority: testCase.priority || "medium",
-        status: testCase.status || "draft",
-        category: testCase.category || "functional",
-        attachments: testCase.attachments || "",
-        created_by: userId,
-      })
+      .insert([testCaseData])
       .select()
       .single();
 
-    if (testCaseError) throw testCaseError;
+    if (error) throw error;
 
-    // Then add steps if provided
-    if (testCase.steps && testCase.steps.length > 0) {
-      const stepsToInsert = testCase.steps.map((step) => ({
-        test_case_id: testCaseData.id,
-        step_number: step.step_number,
-        description: step.description,
-        expected_result: step.expected_result,
+    // If steps are provided, create them
+    if (steps && Array.isArray(steps) && steps.length > 0) {
+      const stepsWithTestCaseId = steps.map(step => ({
+        ...step,
+        test_case_id: data.id
       }));
 
       const { error: stepsError } = await supabase
         .from("test_steps")
-        .insert(stepsToInsert);
+        .insert(stepsWithTestCaseId);
 
       if (stepsError) throw stepsError;
     }
 
-    // Add tags if provided
-    if (testCase.tags && testCase.tags.length > 0) {
-      for (const tag of testCase.tags) {
-        // First check if tag exists
-        const { data: existingTag, error: tagError } = await supabase
-          .from("tags")
-          .select("id")
-          .eq("name", tag.name)
-          .maybeSingle();
-
-        if (tagError) throw tagError;
-
-        let tagId;
-        if (existingTag) {
-          tagId = existingTag.id;
-        } else {
-          // Create new tag
-          const { data: newTag, error: newTagError } = await supabase
-            .from("tags")
-            .insert({ name: tag.name })
-            .select()
-            .single();
-
-          if (newTagError) throw newTagError;
-          tagId = newTag.id;
-        }
-
-        // Link tag to test case
-        const { error: linkError } = await supabase
-          .from("test_case_tags")
-          .insert({
-            test_case_id: testCaseData.id,
-            tag_id: tagId,
-          });
-
-        if (linkError) throw linkError;
-      }
-    }
-
-    return testCaseData;
+    return data;
   } catch (error) {
     console.error("Error creating test case:", error);
     throw error;
   }
 };
 
-export const updateTestCase = async (
-  id: string,
-  updates: Partial<TestCase>,
-): Promise<TestCase> => {
-  const { data, error } = await supabase
-    .from("test_cases")
-    .update({
-      ...updates,
-      updated_at: new Date().toISOString(),
-      updated_by: (await supabase.auth.getUser()).data.user?.id,
-    })
-    .eq("id", id)
-    .select()
-    .single();
+/**
+ * Updates a test case and its steps
+ */
+export const updateTestCase = async (id: string, testCase: Partial<TestCase>) => {
+  try {
+    // Extract steps if present
+    const { steps, ...testCaseData } = testCase;
 
-  if (error) throw error;
-  return data;
+    // First update the test case
+    const { data, error } = await supabase
+      .from("test_cases")
+      .update(testCaseData)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // If steps are provided, handle them
+    if (steps && Array.isArray(steps) && steps.length > 0) {
+      // Delete existing steps
+      const { error: deleteError } = await supabase
+        .from("test_steps")
+        .delete()
+        .eq("test_case_id", id);
+
+      if (deleteError) throw deleteError;
+
+      // Insert new steps
+      const stepsWithTestCaseId = steps.map(step => ({
+        ...step,
+        test_case_id: id
+      }));
+
+      const { error: stepsError } = await supabase
+        .from("test_steps")
+        .insert(stepsWithTestCaseId);
+
+      if (stepsError) throw stepsError;
+    }
+
+    return data;
+  } catch (error) {
+    console.error("Error updating test case:", error);
+    throw error;
+  }
 };
 
 // Test Steps API
@@ -338,9 +291,83 @@ export const createTestRun = async (
       .single();
 
     if (error) throw error;
+
+    // After creating the test run, add all test cases to it with "pending" status
+    const { data: testCases, error: testCasesError } = await supabase
+      .from("test_cases")
+      .select("id");
+
+    if (testCasesError) throw testCasesError;
+
+    if (testCases && testCases.length > 0) {
+      // Create test executions for each test case
+      const testExecutions = testCases.map(testCase => ({
+        test_run_id: data.id,
+        test_case_id: testCase.id,
+        status: "pending", // "pending" status represents "Not executed"
+        executed_by: userId,
+        executed_at: null, // Not executed yet
+      }));
+
+      const { error: executionsError } = await supabase
+        .from("test_executions")
+        .insert(testExecutions);
+
+      if (executionsError) throw executionsError;
+    }
+
     return data;
   } catch (error) {
     console.error("Error creating test run:", error);
+    throw error;
+  }
+};
+
+// Helper function to ensure a test run has executions for all test cases
+export const ensureTestRunHasExecutions = async (runId: string): Promise<void> => {
+  try {
+    // Check if the test run already has executions
+    const { data: existingExecutions, error: existingError } = await supabase
+      .from("test_executions")
+      .select("id")
+      .eq("test_run_id", runId)
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    // If test run already has at least one execution, no need to continue
+    if (existingExecutions && existingExecutions.length > 0) {
+      return;
+    }
+
+    // Get current user or use a default ID
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id || "00000000-0000-0000-0000-000000000000";
+
+    // Get all test cases
+    const { data: testCases, error: testCasesError } = await supabase
+      .from("test_cases")
+      .select("id");
+
+    if (testCasesError) throw testCasesError;
+    if (!testCases || testCases.length === 0) return;
+
+    // Create executions for each test case
+    const executions = testCases.map(testCase => ({
+      test_run_id: runId,
+      test_case_id: testCase.id,
+      status: "pending",
+      executed_by: userId
+    }));
+
+    // Insert the executions
+    const { error: insertError } = await supabase
+      .from("test_executions")
+      .insert(executions);
+
+    if (insertError) throw insertError;
+  } catch (error) {
+    console.error("Error ensuring test run has executions:", error);
     throw error;
   }
 };
@@ -356,6 +383,20 @@ export const getTestExecutionsByRunId = async (
 
   if (error) throw error;
   return data || [];
+};
+
+// Get a map of test executions by test case ID
+export const getTestExecutionMapByRunId = async (
+  runId: string
+): Promise<Record<string, TestExecution>> => {
+  const executions = await getTestExecutionsByRunId(runId);
+  const executionMap: Record<string, TestExecution> = {};
+
+  executions.forEach(execution => {
+    executionMap[execution.test_case_id] = execution;
+  });
+
+  return executionMap;
 };
 
 export const createTestExecution = async (
@@ -387,6 +428,40 @@ export const createTestExecution = async (
     return data;
   } catch (error) {
     console.error("Error creating test execution:", error);
+    throw error;
+  }
+};
+
+// New function to save test step results
+export const createTestStepResults = async (
+  executionId: string,
+  stepResults: Array<{
+    test_step_id: string;
+    status: string;
+    actual_result?: string;
+  }>
+): Promise<void> => {
+  try {
+    // Don't try to save if there are no step results
+    if (!stepResults.length) return;
+
+    // Prepare the data to insert
+    const dataToInsert = stepResults.map(result => ({
+      test_execution_id: executionId,
+      test_step_id: result.test_step_id,
+      status: result.status,
+      actual_result: result.actual_result || "",
+      executed_at: new Date().toISOString()
+    }));
+
+    // Insert all step results
+    const { error } = await supabase
+      .from("test_step_results")
+      .insert(dataToInsert);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error("Error creating test step results:", error);
     throw error;
   }
 };
@@ -534,24 +609,38 @@ export const getReleases = async () => {
 };
 
 export const createRelease = async (name: string, description?: string) => {
-  // Get current user or use a default ID if not logged in
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const userId = user?.id || "00000000-0000-0000-0000-000000000000";
+  try {
+    // Get current user or use a default ID if not logged in
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const userId = user?.id || "00000000-0000-0000-0000-000000000000";
 
-  const { data, error } = await supabase
-    .from("releases")
-    .insert({
-      name,
-      description,
-      created_by: userId,
-    })
-    .select()
-    .single();
+    // Create the release
+    const { data, error } = await supabase
+      .from("releases")
+      .insert({
+        name,
+        description,
+        created_by: userId,
+      })
+      .select()
+      .single();
 
-  if (error) throw error;
-  return data;
+    if (error) throw error;
+
+    // Create a default test run for this release
+    await createTestRun({
+      name: `Initial Test Run - ${name}`,
+      status: "planned",
+      release_id: data.id,
+    });
+
+    return data;
+  } catch (error) {
+    console.error("Error creating release:", error);
+    throw error;
+  }
 };
 
 export const getReleaseById = async (id: string) => {
