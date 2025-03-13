@@ -39,7 +39,7 @@ function AppRoutes() {
   return (
     <>
       <Routes>
-        <Route path="/" element={<TCMSPage />} />
+        <Route path="/" element={<Navigate to="/tcms" />} />
         <Route path="/login" element={<LoginForm />} />
         <Route path="/signup" element={<SignUpForm />} />
         <Route
@@ -118,7 +118,11 @@ function AppRoutes() {
             </PrivateRoute>
           }
         />
-        <Route path="/test-cases/:id" element={<TestCaseExpandedView />} />} />
+        <Route path="/test-cases/:id" element={
+          <PrivateRoute>
+            <TestCaseExpandedView />
+          </PrivateRoute>
+        } />
         <Route path="/test-cases" element={<Navigate to="/tcms/test-cases" replace />} />
       </Routes>
       {import.meta.env.VITE_TEMPO === "true" && useRoutes(routes)}
@@ -136,11 +140,5 @@ function App() {
     </AuthProvider>
   );
 }
-
-// function App() {
-//   return (
-//         <AppRoutes />
-//   );
-// }
 
 export default App;
