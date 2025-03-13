@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useReducer } from "react";
+import React, { useState, useEffect, useCallback, useReducer, useMemo } from "react";
 import TCMSLayout from "../layout/TCMSLayout";
 import TCMSHeader from "../layout/TCMSHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,17 +10,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  CheckCircle,
-  XCircle,
-  AlertTriangle,
-  Clock,
-  Play,
-  Plus,
-  Filter,
-} from "lucide-react";
+import { Plus } from "lucide-react";
 import TestStepExecution from "./TestStepExecution";
 import BugForm from "../bugs/BugForm";
 import { useToast } from "@/components/ui/use-toast";
@@ -46,15 +37,9 @@ import {
   getFeatures,
   getTags,
 } from "../api";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import TestFilters from "./TestFilters";
+import TestCaseList from "./TestCaseList"; // Import the new component
 
 // Simple error boundary component
 const ErrorFallback = ({ error }) => {
@@ -83,7 +68,7 @@ type TestCasesAction =
       type: "UPDATE_TEST_CASE";
       payload: { id: string; type: "manual" | "automated"; updates: any };
     }
-  | { type: "FILTER_BY_RESULT"; payload: string };
+  | { type: "APPLY_FILTERS"; payload: { manual: any[]; automated: any[] } };
 
 const testCasesReducer = (
   state: TestCasesState,
@@ -106,8 +91,7 @@ const testCasesReducer = (
         ...state,
         manual: state.manual.map((testCase) => {
           const execution = action.payload[testCase.id];
-          let status = execution ? execution.status : "not_executed";
-          if (status === "pending") status = "not_executed";
+          const status = execution ? execution.status : "not_executed";
           return {
             ...testCase,
             status,
@@ -116,8 +100,7 @@ const testCasesReducer = (
         }),
         automated: state.automated.map((testCase) => {
           const execution = action.payload[testCase.id];
-          let status = execution ? execution.status : "not_executed";
-          if (status === "pending") status = "not_executed";
+          const status = execution ? execution.status : "not_executed";
           return {
             ...testCase,
             status,
@@ -141,17 +124,11 @@ const testCasesReducer = (
           )
         };
       }
-    case "FILTER_BY_RESULT":
+    case "APPLY_FILTERS":
       return {
         ...state,
-        manual: state.manual.filter(tc => {
-          const execution = testExecutions[tc.id];
-          return execution && execution.status === action.payload;
-        }),
-        automated: state.automated.filter(tc => {
-          const execution = testExecutions[tc.id];
-          return execution && execution.status === action.payload;
-        })
+        manual: action.payload.manual,
+        automated: action.payload.automated,
       };
     default:
       return state;
@@ -163,6 +140,7 @@ const PAGE_SIZE = 20;
 
 const TestExecutionPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
   const [selectedRelease, setSelectedRelease] = useState("");
   const [activeTab, setActiveTab] = useState("manual");
   const [isExecutingTest, setIsExecutingTest] = useState(false);
@@ -173,6 +151,19 @@ const TestExecutionPage = () => {
   const { toast } = useToast();
   const [testSteps, setTestSteps] = useState<any[]>([]);
 
+  // Add filters similar to TestCasesPage
+  const [filters, setFilters] = useState({
+    featureId: "all",
+    priority: "all",
+    tagIds: [] as string[],
+    status: "all",
+    result: "all" // New filter for test execution results
+  });
+
+  // Data for filters
+  const [features, setFeatures] = useState<Array<{id: string, name: string}>>([]);
+  const [tags, setTags] = useState<Array<{id: string, name: string}>>([]);
+
   // Combined test case state with reducer
   const [testCasesState, dispatch] = useReducer(testCasesReducer, {
     manual: [],
@@ -180,6 +171,8 @@ const TestExecutionPage = () => {
     loading: true,
     error: null
   });
+  // New state to store fetched test cases regardless of filtering
+  const [allTestCases, setAllTestCases] = useState<{manual: any[]; automated: any[]}>({manual: [], automated: []});
 
   // Add pagination state
   const [page, setPage] = useState(0);
@@ -220,6 +213,33 @@ const TestExecutionPage = () => {
     // ...existing code...
   };
 
+  // Function to handle filter changes
+  const handleFilterChange = (filterName: string, value: any) => {
+    setFilters(prev => ({
+      ...prev,
+      [filterName]: value
+    }));
+  };
+
+  // Load features and tags for filters
+  useEffect(() => {
+    const loadFilterData = async () => {
+      try {
+        const [featuresData, tagsData] = await Promise.all([
+          getFeatures(),
+          getTags()
+        ]);
+
+        setFeatures(featuresData);
+        setTags(tagsData);
+      } catch (error) {
+        console.error("Error loading filter data:", error);
+      }
+    };
+
+    loadFilterData();
+  }, []);
+
   // Memoized function to load test cases with pagination and filtering
   const loadTestCases = useCallback(async (reset = false) => {
     try {
@@ -241,8 +261,23 @@ const TestExecutionPage = () => {
         .order("created_at", { ascending: false });
 
       // Add search filter if present
-      if (searchQuery) {
-        query = query.ilike("title", `%${searchQuery}%`);
+      if (debouncedSearch) {
+        query = query.ilike("title", `%${debouncedSearch}%`);
+      }
+
+      // Apply feature filter
+      if (filters.featureId && filters.featureId !== "all") {
+        query = query.eq("feature_id", filters.featureId);
+      }
+
+      // Apply priority filter
+      if (filters.priority && filters.priority !== "all") {
+        query = query.eq("priority", filters.priority);
+      }
+
+      // Apply status filter (draft, ready, deprecated)
+      if (filters.status && filters.status !== "all") {
+        query = query.eq("status", filters.status);
       }
 
       const { data: pageTestCases, error } = await query;
@@ -253,7 +288,7 @@ const TestExecutionPage = () => {
       setHasMore(pageTestCases.length === PAGE_SIZE);
 
       // Process test cases
-      const processedCases = (pageTestCases || []).map(testCase => ({
+      let processedCases = (pageTestCases || []).map(testCase => ({
         id: testCase.id,
         title: testCase.title || "Untitled Test Case",
         feature: testCase.features?.name || "Unknown Feature",
@@ -269,6 +304,23 @@ const TestExecutionPage = () => {
           : null,
       }));
 
+      // Apply tag filtering if any tags are selected
+      if (filters.tagIds && filters.tagIds.length > 0) {
+        // We need to get test cases that have these tags
+        const { data: taggedCases } = await supabase
+          .from('test_case_tags')
+          .select('test_case_id')
+          .in('tag_id', filters.tagIds);
+
+        if (taggedCases && taggedCases.length > 0) {
+          const taggedCaseIds = taggedCases.map(tc => tc.test_case_id);
+          processedCases = processedCases.filter(tc => taggedCaseIds.includes(tc.id));
+        } else {
+          // No cases match the tag filter
+          processedCases = [];
+        }
+      }
+
       // Update state based on active tab
       if (activeTab === 'manual') {
         dispatch({
@@ -278,6 +330,10 @@ const TestExecutionPage = () => {
             automated: testCasesState.automated
           }
         });
+        setAllTestCases(prev => ({
+          ...prev,
+          manual: reset ? processedCases : [...prev.manual, ...processedCases]
+        }));
       } else {
         dispatch({
           type: 'FETCH_SUCCESS',
@@ -286,12 +342,12 @@ const TestExecutionPage = () => {
             automated: reset ? processedCases : [...testCasesState.automated, ...processedCases]
           }
         });
+        setAllTestCases(prev => ({
+          ...prev,
+          automated: reset ? processedCases : [...prev.automated, ...processedCases]
+        }));
       }
 
-      // If there's a selected test run, load its executions
-      if (selectedTestRun && reset) {
-        loadTestExecutions(selectedTestRun);
-      }
     } catch (err) {
       console.error("Error loading test cases:", err);
       dispatch({ type: 'FETCH_ERROR', payload: err instanceof Error ? err : new Error(String(err)) });
@@ -303,55 +359,96 @@ const TestExecutionPage = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [page, searchQuery, activeTab, selectedTestRun]);
+  }, [
+    page,
+    debouncedSearch,
+    activeTab,
+    filters.featureId,
+    filters.priority,
+    filters.tagIds,  // Add tagIds to dependency array
+    filters.status   // Add status to dependency array
+  ]);
 
   // Load initial data in parallel when component mounts
-  useEffect(() => {
-    const loadInitialData = async () => {
-      setIsLoading(true);
-      try {
-        // Load releases and test cases in parallel
-        const [releasesResponse] = await Promise.all([
-          getReleases(),
-          loadTestCases(true) // true = reset pagination
-        ]);
+  const loadInitialData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      // Load releases first
+      const releasesResponse = await getReleases();
+      setReleases(releasesResponse);
 
-        setReleases(releasesResponse);
+      // Select first release if available
+      if (releasesResponse.length > 0) {
+        setSelectedRelease(releasesResponse[0].id);
+        // Load test runs for the first release
+        const testRunsData = await getTestRunsByReleaseId(releasesResponse[0].id);
+        setTestRuns(testRunsData);
 
-        // Select first release if available
-        if (releasesResponse.length > 0) {
-          setSelectedRelease(releasesResponse[0].id);
-          // Load test runs for the first release
-          const testRunsData = await getTestRunsByReleaseId(releasesResponse[0].id);
-          setTestRuns(testRunsData);
-
-          // Select first test run if available
-          if (testRunsData.length > 0) {
-            setSelectedTestRun(testRunsData[0].id);
-          }
+        // Select first test run if available
+        if (testRunsData.length > 0 && !selectedTestRun) {
+          setSelectedTestRun(testRunsData[0].id);
         }
-      } catch (error) {
-        console.error("Error loading initial data:", error);
-        toast({
-          title: "Error",
-          description: "Failed to load initial data",
-          variant: "destructive",
-        });
-      } finally {
-        setIsLoading(false);
       }
-    };
 
-    loadInitialData();
-  }, []);
+      // Wait until after releases are loaded to call loadTestCases
+      await loadTestCases(true);
+    } catch (error) {
+      console.error("Error loading initial data:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load initial data",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [loadTestCases, toast, selectedTestRun]);
 
-  // Reload test cases when tab or search changes
   useEffect(() => {
-    loadTestCases(true); // Reset pagination
-  }, [activeTab, searchQuery]);
+    loadInitialData();
+  }, [loadInitialData]);
+
+  // Create memoized dependencies for query filters
+  const queryDeps = useMemo(() => [activeTab, debouncedSearch], [activeTab, debouncedSearch]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      loadTestCases(true);
+    }
+  }, [queryDeps, loadTestCases, isLoading]);
+
+  // Update filteredTestCases to properly handle result filter
+  const filteredTestCases = useMemo(() => {
+    const base = activeTab === "manual" ? allTestCases.manual : allTestCases.automated;
+
+    // First apply execution status to each test case
+    const updatedBase = base.map(tc => {
+      const execution = testExecutions[tc.id];
+      return {
+        ...tc,
+        status: execution ? execution.status : "not_executed"
+      };
+    });
+
+    // Then apply result filter if needed
+    if (filters.result && filters.result !== "all") {
+      return updatedBase.filter(tc => {
+        const execution = testExecutions[tc.id];
+        if (filters.result === "not_executed") {
+          // Match either no execution or pending status
+          return !execution || execution.status === "pending";
+        } else {
+          // For passed, failed, blocked - explicitly match that status
+          return execution && execution.status === filters.result;
+        }
+      });
+    }
+
+    return updatedBase;
+  }, [allTestCases, activeTab, filters.result, testExecutions]);
 
   // Optimized function to load test executions
-  const loadTestExecutions = async (runId) => {
+  const loadTestExecutions = useCallback(async (runId) => {
     if (!runId) {
       setTestExecutions({});
       return;
@@ -392,59 +489,7 @@ const TestExecutionPage = () => {
     } finally {
       setLoadingExecutions(false);
     }
-  };
-
-  // Optimized function to create test executions with a single request
-  const createExecutionsForTestRun = async (runId) => {
-    try {
-      // Get current user or use a default ID
-      const { data: { user } } = await supabase.auth.getUser();
-      const userId = user?.id || "00000000-0000-0000-0000-000000000000";
-
-      // Get all test cases IDs needed for this test run
-      const testCaseIds = [
-        ...testCasesState.manual.map(tc => tc.id),
-        ...testCasesState.automated.map(tc => tc.id)
-      ];
-
-      if (testCaseIds.length === 0) return;
-
-      // Create execution records
-      const executionsMap = {};
-      const testExecutions = testCaseIds.map(testCaseId => {
-        const execution = {
-          test_run_id: runId,
-          test_case_id: testCaseId,
-          status: "not_executed",
-          executed_by: userId,
-          executed_at: new Date().toISOString()
-        };
-
-        // Also store in our local map to avoid refetching
-        executionsMap[testCaseId] = execution;
-        return execution;
-      });
-
-      // Create all executions in a single request
-      const { error: executionsError } = await supabase
-        .from("test_executions")
-        .insert(testExecutions);
-
-      if (executionsError) throw executionsError;
-
-      // Update UI state without requiring a refetch
-      setTestExecutions(executionsMap);
-      dispatch({ type: 'UPDATE_STATUSES', payload: executionsMap });
-
-      toast({
-        title: "Test Cases Added",
-        description: "Test cases have been added to this test run",
-      });
-    } catch (error) {
-      console.error("Error creating test executions:", error);
-      throw error;
-    }
-  };
+  }, [dispatch, toast]);
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
@@ -482,9 +527,9 @@ const TestExecutionPage = () => {
     if (selectedTestRun) {
       loadTestExecutions(selectedTestRun);
     }
-  }, [selectedTestRun]);
+  }, [selectedTestRun, loadTestExecutions]);
 
-  // Fix the execute step button handler to prevent null reference errors
+  // Handle executing a test case
   const handleExecuteTest = async (testCase) => {
     if (!selectedTestRun) {
       toast({
@@ -562,36 +607,9 @@ const TestExecutionPage = () => {
     }
   }, [testCasesState.loading, hasMore, loadTestCases]);
 
-  // Return early if there's an error
-  if (testCasesState.error) {
-    return (
-      <TCMSLayout>
-        <TCMSHeader title="Test Execution" onSearch={handleSearch} />
-        <div className="p-6">
-          <ErrorFallback error={testCasesState.error} />
-        </div>
-      </TCMSLayout>
-    );
-  }
-
-  // Return loading state
-  if (isLoading) {
-    return (
-      <TCMSLayout>
-        <TCMSHeader title="Test Execution" onSearch={handleSearch} />
-        <div className="p-6">
-          <div className="text-center py-12">
-            <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-500 border-r-transparent"></div>
-            <p className="mt-4 text-gray-600">Loading test execution data...</p>
-          </div>
-        </div>
-      </TCMSLayout>
-    );
-  }
-
   // Render test cases with optimized loading states
   const renderTestCases = (testType) => {
-    const testCases = testType === 'manual' ? testCasesState.manual : testCasesState.automated;
+    const testCases = testType === 'manual' ? filteredTestCases : filteredTestCases;
     const isLoading = testCasesState.loading;
 
     if (isLoading && testCases.length === 0) {
@@ -692,6 +710,14 @@ const TestExecutionPage = () => {
     );
   };
 
+  // Count active filters for badge display
+  const activeFilterCount =
+    (filters.featureId !== "all" ? 1 : 0) +
+    (filters.priority !== "all" ? 1 : 0) +
+    (filters.status !== "all" ? 1 : 0) +
+    (filters.result !== "all" ? 1 : 0) +
+    filters.tagIds.length;
+
   return (
     <TCMSLayout>
       <TCMSHeader title="Test Execution" onSearch={handleSearch} />
@@ -775,23 +801,18 @@ const TestExecutionPage = () => {
             <CardContent>
               {testRuns.length > 0 && (
                 <div className="mb-4">
-                  <Label
-                    htmlFor="testRun"
-                    className="text-sm text-gray-500 mb-2 block"
-                  >
-                    Test Run:
-                  </Label>
+                  <span className="text-sm text-gray-500 mr-2">Test Run:</span>
                   <Select
                     value={selectedTestRun}
                     onValueChange={setSelectedTestRun}
                   >
-                    <SelectTrigger className="w-full h-9">
+                    <SelectTrigger className="w-[250px] h-9">
                       <SelectValue placeholder="Select a test run" />
                     </SelectTrigger>
                     <SelectContent>
-                      {testRuns.map((run) => (
-                        <SelectItem key={run.id} value={run.id}>
-                          {run.name}
+                      {testRuns.map((testRun) => (
+                        <SelectItem key={testRun.id} value={testRun.id}>
+                          {testRun.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -799,112 +820,72 @@ const TestExecutionPage = () => {
                 </div>
               )}
 
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <div className="h-3 w-3 rounded-full bg-green-500"></div>
-                    <span className="text-sm text-gray-700">
-                      Passed:{" "}
-                      {testCasesState.manual.filter((tc) => tc.status === "passed")
-                        .length +
-                        testCasesState.automated.filter((tc) => tc.status === "passed")
-                          .length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="h-3 w-3 rounded-full bg-red-500"></div>
-                    <span className="text-sm text-gray-700">
-                      Failed:{" "}
-                      {testCasesState.manual.filter((tc) => tc.status === "failed")
-                        .length +
-                        testCasesState.automated.filter((tc) => tc.status === "failed")
-                          .length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="h-3 w-3 rounded-full bg-orange-500"></div>
-                    <span className="text-sm text-gray-700">
-                      Blocked:{" "}
-                      {testCasesState.manual.filter((tc) => tc.status === "blocked")
-                        .length +
-                        testCasesState.automated.filter((tc) => tc.status === "blocked")
-                          .length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="h-3 w-3 rounded-full bg-gray-400"></div>
-                    <span className="text-sm text-gray-700">
-                      Not Executed:{" "}
-                      {testCasesState.manual.filter(
-                        (tc) => tc.status === "not_executed",
-                      ).length +
-                        testCasesState.automated.filter(
-                          (tc) => tc.status === "not_executed",
-                        ).length}
-                    </span>
-                  </div>
-                </div>
-                <div className="text-sm text-gray-500">
-                  Total: {testCasesState.manual.length + testCasesState.automated.length} test
-                  cases
-                </div>
+              <div className="flex items-center gap-2 mb-4">
+                <Tabs defaultValue="manual" className="w-full">
+                  <TabsList>
+                    <TabsTrigger value="manual" onClick={() => setActiveTab("manual")}>Manual</TabsTrigger>
+                    <TabsTrigger value="automated" onClick={() => setActiveTab("automated")}>Automated</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="manual">
+                    <TestFilters
+                      filters={filters}
+                      onFilterChange={handleFilterChange}
+                      features={features}
+                      tags={tags}
+                    />
+                    <ScrollArea className="h-[400px] w-full rounded-md border">
+                      <TestCaseList
+                        testCases={filteredTestCases}
+                        testExecutions={testExecutions}
+                        isLoading={testCasesState.loading}
+                        isLoadingExecutions={loadingExecutions}
+                        hasMore={hasMore}
+                        onLoadMore={handleLoadMore}
+                        onExecuteTest={handleExecuteTest}
+                      />
+                    </ScrollArea>
+                  </TabsContent>
+                  <TabsContent value="automated">
+                    <TestFilters
+                      filters={filters}
+                      onFilterChange={handleFilterChange}
+                      features={features}
+                      tags={tags}
+                    />
+                    <ScrollArea className="h-[400px] w-full rounded-md border">
+                      <TestCaseList
+                        testCases={filteredTestCases}
+                        testExecutions={testExecutions}
+                        isLoading={testCasesState.loading}
+                        isLoadingExecutions={loadingExecutions}
+                        hasMore={hasMore}
+                        onLoadMore={handleLoadMore}
+                        onExecuteTest={handleExecuteTest}
+                      />
+                    </ScrollArea>
+                  </TabsContent>
+                </Tabs>
               </div>
-
-              <Tabs
-                defaultValue="manual"
-                className="w-full"
-                onValueChange={(value) => {
-                  setActiveTab(value);
-                  // Reset pagination when tab changes
-                  setPage(0);
-                }}
-              >
-                <TabsList className="grid w-full grid-cols-2 mb-6">
-                  <TabsTrigger value="manual">Manual Tests</TabsTrigger>
-                  <TabsTrigger value="automated">Automated Tests</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="manual" className="space-y-4">
-                  {renderTestCases('manual')}
-                </TabsContent>
-
-                <TabsContent value="automated" className="space-y-4">
-                  {renderTestCases('automated')}
-                </TabsContent>
-              </Tabs>
             </CardContent>
           </Card>
         </React.Suspense>
-      </div>
 
-      {/* Test Execution Panel */}
-      {isExecutingTest && selectedTestCase && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-auto">
-            <div className="p-4">
+        {/* Test Execution Panel */}
+        {isExecutingTest && selectedTestCase && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div className="w-full max-w-2xl">
               <TestStepExecution
-                key={selectedTestCase.id} // <-- added key prop for remounting when testCase changes
                 testCase={selectedTestCase}
                 steps={testSteps}
                 onComplete={async (results) => {
                   try {
-                    // Make sure we have a valid test run ID
                     if (!selectedTestRun) {
-                      // Create a new test run if none is selected
-                      // Make sure we have a valid release ID
-                      let releaseId = selectedRelease;
-                      if (!releaseId && releases.length > 0) {
-                        releaseId = releases[0].id;
-                        setSelectedRelease(releaseId);
-                      }
-
+                      // Create a new test run for the selected release
                       const newTestRun = await createTestRun({
-                        name: `Auto-created Test Run - ${new Date().toLocaleDateString()}`,
+                        name: `Test Run - ${new Date().toLocaleDateString()}`,
                         status: "in_progress",
-                        release_id: releaseId,
+                        release_id: selectedRelease,
                       });
-                      setTestRuns([newTestRun, ...testRuns]);
-                      setSelectedTestRun(newTestRun.id);
 
                       // Save the test execution result with the new test run
                       const execution = await createTestExecution({
@@ -970,6 +951,31 @@ const TestExecutionPage = () => {
                       });
                     }
 
+                    // Update allTestCases state to reflect the new status
+                    setAllTestCases(prev => {
+                      const typeKey = selectedTestCase.test_type === "manual" ? "manual" : "automated";
+                      return {
+                        ...prev,
+                        [typeKey]: prev[typeKey].map(tc =>
+                          tc.id === selectedTestCase.id ? { ...tc, status: results.status } : tc
+                        )
+                      };
+                    });
+
+                    // Also update testExecutions to include the new execution
+                    setTestExecutions(prev => ({
+                      ...prev,
+                      [selectedTestCase.id]: {
+                        // Don't spread the execution object directly as it might be undefined
+                        // Instead, create a new object with the properties we know will exist
+                        test_run_id: selectedTestRun || "",
+                        test_case_id: selectedTestCase.id,
+                        status: results.status,
+                        executed_at: new Date().toISOString(),
+                        notes: results.notes || ""
+                      }
+                    }));
+
                     setIsExecutingTest(false);
                     toast({
                       title: `Test ${results.status === "passed" ? "Passed" : results.status === "failed" ? "Failed" : "Blocked"}`,
@@ -1010,122 +1016,122 @@ const TestExecutionPage = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Bug Report Form - only show if selectedTestCase exists */}
-      {selectedTestCase && (
-        <BugForm
-          isOpen={isBugFormOpen}
-          onClose={() => setIsBugFormOpen(false)}
-          onSubmit={async (bug) => {
-            try {
-              // Save the bug to the database
-              await createBug({
-                ...bug,
-                release_id: selectedRelease,
-                test_execution_id: selectedTestRun
-                  ? `${selectedTestRun}-${selectedTestCase.id}`
-                  : undefined,
-              });
+        {/* Bug Report Form - only show if selectedTestCase exists */}
+        {selectedTestCase && (
+          <BugForm
+            isOpen={isBugFormOpen}
+            onClose={() => setIsBugFormOpen(false)}
+            onSubmit={async (bug) => {
+              try {
+                // Save the bug to the database
+                await createBug({
+                  ...bug,
+                  release_id: selectedRelease,
+                  test_execution_id: selectedTestRun
+                    ? `${selectedTestRun}-${selectedTestCase.id}`
+                    : undefined,
+                });
 
-              toast({
-                title: "Bug Reported",
-                description:
-                  "Bug has been successfully reported and linked to the test case",
-              });
-              setIsBugFormOpen(false);
-            } catch (error) {
-              console.error("Error reporting bug:", error);
-              toast({
-                title: "Error",
-                description: "Failed to report bug",
-                variant: "destructive",
-              });
+                toast({
+                  title: "Bug Reported",
+                  description:
+                    "Bug has been successfully reported and linked to the test case",
+                });
+                setIsBugFormOpen(false);
+              } catch (error) {
+                console.error("Error reporting bug:", error);
+                toast({
+                  title: "Error",
+                  description: "Failed to report bug",
+                  variant: "destructive",
+                });
+              }
+            }}
+            testExecutionId={
+              selectedTestRun && selectedTestCase
+                ? `${selectedTestRun}-${selectedTestCase.id}`
+                : undefined
             }
-          }}
-          testExecutionId={
-            selectedTestRun && selectedTestCase
-              ? `${selectedTestRun}-${selectedTestCase.id}`
-              : undefined
-          }
-          testCase={selectedTestCase}
-          failedStep={{
-            step_number: 2,
-            description: "Apply the test stimulus to the system",
-            expected_result: "System receives the stimulus and begins processing",
-            actual_result: "System did not respond to the stimulus",
-          }}
-          release={selectedRelease}
-        />
-      )}
+            testCase={selectedTestCase}
+            failedStep={{
+              step_number: 2,
+              description: "Apply the test stimulus to the system",
+              expected_result: "System receives the stimulus and begins processing",
+              actual_result: "System did not respond to the stimulus",
+            }}
+            release={selectedRelease}
+          />
+        )}
 
-      {/* New Release Dialog */}
-      <Dialog open={isReleaseFormOpen} onOpenChange={setIsReleaseFormOpen}>
-        <DialogContent className="sm:max-w-[400px]">
-          <DialogHeader>
-            <DialogTitle>Create New Release</DialogTitle>
-            <DialogDescription>
-              Add a new release version to organize your test runs.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="releaseName">Release Name</Label>
-              <Input
-                id="releaseName"
-                value={newReleaseName}
-                onChange={(e) => setNewReleaseName(e.target.value)}
-                placeholder="e.g., v1.1.0 - August Release"
-              />
+        {/* New Release Dialog */}
+        <Dialog open={isReleaseFormOpen} onOpenChange={setIsReleaseFormOpen}>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Create New Release</DialogTitle>
+              <DialogDescription>
+                Add a new release version to organize your test runs.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="releaseName">Release Name</Label>
+                <Input
+                  id="releaseName"
+                  value={newReleaseName}
+                  onChange={(e) => setNewReleaseName(e.target.value)}
+                  placeholder="e.g., v1.1.0 - August Release"
+                />
+              </div>
             </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setIsReleaseFormOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={async () => {
-                if (newReleaseName.trim()) {
-                  try {
-                    // Create the release in the database
-                    const newRelease = await createRelease(newReleaseName);
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setIsReleaseFormOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (newReleaseName.trim()) {
+                    try {
+                      // Create the release in the database
+                      const newRelease = await createRelease(newReleaseName);
 
-                    // Update the releases list
-                    setReleases([newRelease, ...releases]);
-                    setSelectedRelease(newRelease.id);
+                      // Update the releases list
+                      setReleases([newRelease, ...releases]);
+                      setSelectedRelease(newRelease.id);
 
-                    toast({
-                      title: "Release Created",
-                      description: `New release "${newReleaseName}" has been created.`,
-                    });
-                    setNewReleaseName("");
-                    setIsReleaseFormOpen(false);
-                  } catch (error) {
-                    console.error("Error creating release:", error);
+                      toast({
+                        title: "Release Created",
+                        description: `New release "${newReleaseName}" has been created.`,
+                      });
+                      setNewReleaseName("");
+                      setIsReleaseFormOpen(false);
+                    } catch (error) {
+                      console.error("Error creating release:", error);
+                      toast({
+                        title: "Error",
+                        description: "Failed to create release",
+                        variant: "destructive",
+                      });
+                    }
+                  } else {
                     toast({
                       title: "Error",
-                      description: "Failed to create release",
+                      description: "Release name is required",
                       variant: "destructive",
                     });
                   }
-                } else {
-                  toast({
-                    title: "Error",
-                    description: "Release name is required",
-                    variant: "destructive",
-                  });
-                }
-              }}
-            >
-              Create Release
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                }}
+              >
+                Create Release
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div >
     </TCMSLayout>
   );
 };
