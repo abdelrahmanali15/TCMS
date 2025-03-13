@@ -44,11 +44,11 @@ const TestCaseExpandedView = () => {
       try {
         setIsLoading(true);
         const data = await getTestCaseWithSteps(id);
-        console.log("Fetched test case data:", data);
+        // console.log("Fetched test case data:", data);
 
         // Extra logging for tags
         if (data.tags) {
-          console.log("Tags data structure in expanded view:", JSON.stringify(data.tags));
+          // console.log("Tags data structure in expanded view:", JSON.stringify(data.tags));
         }
 
         // Make sure tags is always defined
