@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useReducer, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useReducer } from "react";
 import TCMSLayout from "../layout/TCMSLayout";
 import TCMSHeader from "../layout/TCMSHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,8 +10,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus } from "lucide-react";
+import {
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  Clock,
+  Play,
+  Plus,
+  Filter,
+} from "lucide-react";
 import TestStepExecution from "./TestStepExecution";
 import BugForm from "../bugs/BugForm";
 import { useToast } from "@/components/ui/use-toast";
@@ -36,10 +45,19 @@ import {
   getTestRunsByReleaseId,
   getFeatures,
   getTags,
+  getTestExecutionMapByRunId,
+  ensureTestRunHasExecutions,
+  batchCreateTestExecutions,
 } from "../api";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import TestFilters from "./TestFilters";
-import TestCaseList from "./TestCaseList"; // Import the new component
 
 // Simple error boundary component
 const ErrorFallback = ({ error }) => {
@@ -68,6 +86,7 @@ type TestCasesAction =
       type: "UPDATE_TEST_CASE";
       payload: { id: string; type: "manual" | "automated"; updates: any };
     }
+  | { type: "FILTER_BY_RESULT"; payload: { status: string; executions: Record<string, any> } }
   | { type: "APPLY_FILTERS"; payload: { manual: any[]; automated: any[] } };
 
 const testCasesReducer = (
@@ -91,7 +110,8 @@ const testCasesReducer = (
         ...state,
         manual: state.manual.map((testCase) => {
           const execution = action.payload[testCase.id];
-          const status = execution ? execution.status : "not_executed";
+          let status = execution ? execution.status : "not_executed";
+          if (status === "pending") status = "not_executed";
           return {
             ...testCase,
             status,
@@ -100,7 +120,8 @@ const testCasesReducer = (
         }),
         automated: state.automated.map((testCase) => {
           const execution = action.payload[testCase.id];
-          const status = execution ? execution.status : "not_executed";
+          let status = execution ? execution.status : "not_executed";
+          if (status === "pending") status = "not_executed";
           return {
             ...testCase,
             status,
@@ -124,6 +145,23 @@ const testCasesReducer = (
           )
         };
       }
+    case "FILTER_BY_RESULT":
+      // Fixed: Now uses executions from payload instead of external state
+      return {
+        ...state,
+        manual: state.manual.filter(tc => {
+          const execution = action.payload.executions[tc.id];
+          return action.payload.status === 'not_executed'
+            ? !execution || execution.status === 'pending'
+            : execution && execution.status === action.payload.status;
+        }),
+        automated: state.automated.filter(tc => {
+          const execution = action.payload.executions[tc.id];
+          return action.payload.status === 'not_executed'
+            ? !execution || execution.status === 'pending'
+            : execution && execution.status === action.payload.status;
+        })
+      };
     case "APPLY_FILTERS":
       return {
         ...state,
@@ -140,7 +178,6 @@ const PAGE_SIZE = 20;
 
 const TestExecutionPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
   const [selectedRelease, setSelectedRelease] = useState("");
   const [activeTab, setActiveTab] = useState("manual");
   const [isExecutingTest, setIsExecutingTest] = useState(false);
@@ -171,8 +208,6 @@ const TestExecutionPage = () => {
     loading: true,
     error: null
   });
-  // New state to store fetched test cases regardless of filtering
-  const [allTestCases, setAllTestCases] = useState<{manual: any[]; automated: any[]}>({manual: [], automated: []});
 
   // Add pagination state
   const [page, setPage] = useState(0);
@@ -240,256 +275,407 @@ const TestExecutionPage = () => {
     loadFilterData();
   }, []);
 
-  // Memoized function to load test cases with pagination and filtering
-  const loadTestCases = useCallback(async (reset = false) => {
-    try {
-      // If resetting pagination, start from page 0
-      const currentPage = reset ? 0 : page;
-      if (reset) {
-        setPage(0);
-        setHasMore(true);
-      }
+// Memoized function to load test cases with pagination and filtering - FIXED DEPENDENCIES
+const loadTestCases = useCallback(async (reset = false) => {
+  try {
+    console.log(`Loading test cases (${activeTab}), reset=${reset}`);
 
-      dispatch({ type: 'FETCH_START' });
+    // If resetting pagination, start from page 0
+    const currentPage = reset ? 0 : page;
+    if (reset) {
+      setPage(0);
+      setHasMore(true);
+    }
 
-      // Build query with filters and pagination
-      let query = supabase
-        .from("test_cases")
-        .select("*, features(name)")
-        .eq("test_type", activeTab) // Filter by current tab
-        .range(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE - 1)
-        .order("created_at", { ascending: false });
+    dispatch({ type: 'FETCH_START' });
 
-      // Add search filter if present
-      if (debouncedSearch) {
-        query = query.ilike("title", `%${debouncedSearch}%`);
-      }
+    // Build query with filters and pagination
+    let query = supabase
+      .from("test_cases")
+      .select("*, features(name)")
+      .eq("test_type", activeTab) // Filter by current tab
+      .range(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE - 1)
+      .order("created_at", { ascending: false });
 
-      // Apply feature filter
-      if (filters.featureId && filters.featureId !== "all") {
-        query = query.eq("feature_id", filters.featureId);
-      }
+    // Add search filter if present
+    if (searchQuery) {
+      query = query.ilike("title", `%${searchQuery}%`);
+    }
 
-      // Apply priority filter
-      if (filters.priority && filters.priority !== "all") {
-        query = query.eq("priority", filters.priority);
-      }
+    // Apply feature filter
+    if (filters.featureId && filters.featureId !== "all") {
+      query = query.eq("feature_id", filters.featureId);
+    }
 
-      // Apply status filter (draft, ready, deprecated)
-      if (filters.status && filters.status !== "all") {
-        query = query.eq("status", filters.status);
-      }
+    // Apply priority filter
+    if (filters.priority && filters.priority !== "all") {
+      query = query.eq("priority", filters.priority);
+    }
 
-      const { data: pageTestCases, error } = await query;
+    // Apply status filter
+    if (filters.status && filters.status !== "all") {
+      query = query.eq("status", filters.status);
+    }
 
-      if (error) throw error;
+    const { data: pageTestCases, error } = await query;
 
-      // Check if we've reached the end of data
-      setHasMore(pageTestCases.length === PAGE_SIZE);
+    if (error) throw error;
 
-      // Process test cases
-      let processedCases = (pageTestCases || []).map(testCase => ({
-        id: testCase.id,
-        title: testCase.title || "Untitled Test Case",
-        feature: testCase.features?.name || "Unknown Feature",
-        feature_id: testCase.feature_id,
-        priority: testCase.priority || "medium",
-        status: "not_executed", // Default status - will be updated if there's an execution
-        assignedTo: "",
-        lastExecuted: null,
-        description: testCase.description || "",
-        test_type: testCase.test_type || "manual",
-        script: testCase.test_type === "automated"
-          ? `${(testCase.title || "untitled").toLowerCase().replace(/\s+/g, "_")}.py`
-          : null,
-      }));
+    console.log(`Received ${pageTestCases?.length || 0} test cases`);
 
-      // Apply tag filtering if any tags are selected
-      if (filters.tagIds && filters.tagIds.length > 0) {
-        // We need to get test cases that have these tags
-        const { data: taggedCases } = await supabase
-          .from('test_case_tags')
-          .select('test_case_id')
-          .in('tag_id', filters.tagIds);
+    // Process test cases - handle empty data case
+    let processedCases = (pageTestCases || []).map(testCase => ({
+      id: testCase.id,
+      title: testCase.title || "Untitled Test Case",
+      feature: testCase.features?.name || "Unknown Feature",
+      feature_id: testCase.feature_id,
+      priority: testCase.priority || "medium",
+      status: "not_executed", // Default status - will be updated if there's an execution
+      assignedTo: "",
+      lastExecuted: null,
+      description: testCase.description || "",
+      test_type: testCase.test_type || "manual",
+      script: testCase.test_type === "automated"
+        ? `${(testCase.title || "untitled").toLowerCase().replace(/\s+/g, "_")}.py`
+        : null,
+    }));
 
-        if (taggedCases && taggedCases.length > 0) {
-          const taggedCaseIds = taggedCases.map(tc => tc.test_case_id);
-          processedCases = processedCases.filter(tc => taggedCaseIds.includes(tc.id));
-        } else {
-          // No cases match the tag filter
-          processedCases = [];
-        }
-      }
+    // Apply tag filtering if any tags are selected
+    if (filters.tagIds && filters.tagIds.length > 0) {
+      const { data: taggedCases } = await supabase
+        .from('test_case_tags')
+        .select('test_case_id')
+        .in('tag_id', filters.tagIds);
 
-      // Update state based on active tab
-      if (activeTab === 'manual') {
-        dispatch({
-          type: 'FETCH_SUCCESS',
-          payload: {
-            manual: reset ? processedCases : [...testCasesState.manual, ...processedCases],
-            automated: testCasesState.automated
-          }
-        });
-        setAllTestCases(prev => ({
-          ...prev,
-          manual: reset ? processedCases : [...prev.manual, ...processedCases]
-        }));
+      if (taggedCases && taggedCases.length > 0) {
+        const taggedCaseIds = taggedCases.map(tc => tc.test_case_id);
+        processedCases = processedCases.filter(tc => taggedCaseIds.includes(tc.id));
       } else {
-        dispatch({
-          type: 'FETCH_SUCCESS',
-          payload: {
-            manual: testCasesState.manual,
-            automated: reset ? processedCases : [...testCasesState.automated, ...processedCases]
-          }
-        });
-        setAllTestCases(prev => ({
-          ...prev,
-          automated: reset ? processedCases : [...prev.automated, ...processedCases]
-        }));
+        processedCases = [];
       }
-
-    } catch (err) {
-      console.error("Error loading test cases:", err);
-      dispatch({ type: 'FETCH_ERROR', payload: err instanceof Error ? err : new Error(String(err)) });
-      toast({
-        title: "Error",
-        description: "Failed to load test cases",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
     }
-  }, [
-    page,
-    debouncedSearch,
-    activeTab,
-    filters.featureId,
-    filters.priority,
-    filters.tagIds,  // Add tagIds to dependency array
-    filters.status   // Add status to dependency array
-  ]);
 
-  // Load initial data in parallel when component mounts
-  const loadInitialData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      // Load releases first
-      const releasesResponse = await getReleases();
-      setReleases(releasesResponse);
-
-      // Select first release if available
-      if (releasesResponse.length > 0) {
-        setSelectedRelease(releasesResponse[0].id);
-        // Load test runs for the first release
-        const testRunsData = await getTestRunsByReleaseId(releasesResponse[0].id);
-        setTestRuns(testRunsData);
-
-        // Select first test run if available
-        if (testRunsData.length > 0 && !selectedTestRun) {
-          setSelectedTestRun(testRunsData[0].id);
+    // Update state based on active tab
+    if (activeTab === 'manual') {
+      dispatch({
+        type: 'FETCH_SUCCESS',
+        payload: {
+          manual: reset ? processedCases : [...testCasesState.manual, ...processedCases],
+          automated: testCasesState.automated
         }
-      }
-
-      // Wait until after releases are loaded to call loadTestCases
-      await loadTestCases(true);
-    } catch (error) {
-      console.error("Error loading initial data:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load initial data",
-        variant: "destructive",
       });
-    } finally {
-      setIsLoading(false);
+    } else {
+      dispatch({
+        type: 'FETCH_SUCCESS',
+        payload: {
+          manual: testCasesState.manual,
+          automated: reset ? processedCases : [...testCasesState.automated, ...processedCases]
+        }
+      });
     }
-  }, [loadTestCases, toast, selectedTestRun]);
 
-  useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
+    // Set hasMore flag based on results
+    setHasMore(processedCases.length === PAGE_SIZE);
 
-  // Create memoized dependencies for query filters
-  const queryDeps = useMemo(() => [activeTab, debouncedSearch], [activeTab, debouncedSearch]);
+    console.log("Test cases loading completed successfully");
+    return processedCases;
+  } catch (err) {
+    console.error("Error loading test cases:", err);
+    dispatch({ type: 'FETCH_ERROR', payload: err instanceof Error ? err : new Error(String(err)) });
+    toast({
+      title: "Error",
+      description: "Failed to load test cases: " + (err instanceof Error ? err.message : String(err)),
+      variant: "destructive",
+    });
+    return [];
+  } finally {
+    setIsLoading(false);
+  }
+}, [page, searchQuery, activeTab, filters, toast, testCasesState.manual, testCasesState.automated]);
 
-  useEffect(() => {
-    if (!isLoading) {
-      loadTestCases(true);
+// Add a state to control when to load executions after loading cases
+const [loadExecutionsAfterCases, setLoadExecutionsAfterCases] = useState(true);
+
+// Move the createExecutionsForTestRun function definition up BEFORE loadTestExecutions
+// Add the missing createExecutionsForTestRun function
+const createExecutionsForTestRun = useCallback(async (runId: string) => {
+  if (!runId) {
+    console.warn("Cannot create executions for empty run ID");
+    return {};
+  }
+
+  try {
+    console.log("Creating executions for test run:", runId);
+
+    // Use a simpler approach - get all test cases and create executions directly
+    const { data: testCases } = await supabase
+      .from("test_cases")
+      .select("id");
+
+    if (!testCases || testCases.length === 0) {
+      console.log("No test cases found to create executions for");
+      return {};
     }
-  }, [queryDeps, loadTestCases, isLoading]);
 
-  // Update filteredTestCases to properly handle result filter
-  const filteredTestCases = useMemo(() => {
-    const base = activeTab === "manual" ? allTestCases.manual : allTestCases.automated;
+    // Get current user or use default
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id || "00000000-0000-0000-0000-000000000000";
 
-    // First apply execution status to each test case
-    const updatedBase = base.map(tc => {
-      const execution = testExecutions[tc.id];
-      return {
-        ...tc,
-        status: execution ? execution.status : "not_executed"
-      };
+    // Create executions for all test cases
+    const executionsToInsert = testCases.map(tc => ({
+      test_run_id: runId,
+      test_case_id: tc.id,
+      status: "pending",
+      executed_by: userId
+    }));
+
+    console.log(`Creating ${executionsToInsert.length} test executions`);
+
+    // Insert executions
+    const { error } = await supabase
+      .from("test_executions")
+      .insert(executionsToInsert);
+
+    if (error) {
+      console.error("Error inserting executions:", error);
+      throw error;
+    }
+
+    // Get the created executions
+    const { data: createdExecutions, error: fetchError } = await supabase
+      .from("test_executions")
+      .select("*")
+      .eq("test_run_id", runId);
+
+    if (fetchError) {
+      console.error("Error fetching created executions:", fetchError);
+      throw fetchError;
+    }
+
+    // Create a map of executions by test case ID
+    const executionMap = {};
+    (createdExecutions || []).forEach(execution => {
+      executionMap[execution.test_case_id] = execution;
     });
 
-    // Then apply result filter if needed
-    if (filters.result && filters.result !== "all") {
-      return updatedBase.filter(tc => {
-        const execution = testExecutions[tc.id];
-        if (filters.result === "not_executed") {
-          // Match either no execution or pending status
-          return !execution || execution.status === "pending";
-        } else {
-          // For passed, failed, blocked - explicitly match that status
-          return execution && execution.status === filters.result;
-        }
-      });
-    }
+    console.log("Created execution map with keys:", Object.keys(executionMap).length);
 
-    return updatedBase;
-  }, [allTestCases, activeTab, filters.result, testExecutions]);
+    // Update UI with executions
+    setTestExecutions(executionMap);
+    dispatch({ type: 'UPDATE_STATUSES', payload: executionMap });
 
-  // Optimized function to load test executions
-  const loadTestExecutions = useCallback(async (runId) => {
+    return executionMap;
+  } catch (error) {
+    console.error("Error creating test executions:", error);
+    toast({
+      title: "Error",
+      description: "Failed to create test executions: " + (error instanceof Error ? error.message : String(error)),
+      variant: "destructive",
+    });
+    return {};
+  }
+}, [toast, dispatch]);
+
+// Optimized function to load test executions - Fixed
+const loadTestExecutions = useCallback(async (runId) => {
+  try {
     if (!runId) {
+      console.log("No test run selected, skipping execution loading");
       setTestExecutions({});
+      setLoadingExecutions(false);
       return;
     }
 
-    try {
-      setLoadingExecutions(true);
+    console.log(`Loading executions for test run: ${runId}`);
+    setLoadingExecutions(true);
 
-      // Load test executions for the selected test run
-      const { data, error } = await supabase
-        .from("test_executions")
-        .select("*")
-        .eq("test_run_id", runId);
+    const { data, error } = await supabase
+      .from("test_executions")
+      .select("*")
+      .eq("test_run_id", runId);
 
-      if (error) throw error;
-
-      // Create a map of executions by test case ID
-      const executionsMap = {};
-
-      if (data && data.length > 0) {
-        data.forEach(execution => {
-          executionsMap[execution.test_case_id] = execution;
-        });
-
-        setTestExecutions(executionsMap);
-        dispatch({ type: 'UPDATE_STATUSES', payload: executionsMap });
-      } else {
-        // No executions found - create them in batch and avoid re-fetching
-        await createExecutionsForTestRun(runId);
-      }
-    } catch (error) {
-      console.error("Error loading test executions:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load test executions",
-        variant: "destructive",
-      });
-    } finally {
-      setLoadingExecutions(false);
+    if (error) {
+      throw error;
     }
-  }, [dispatch, toast]);
+
+    const executionsMap = {};
+    if (data && data.length > 0) {
+      console.log(`Found ${data.length} executions`);
+      data.forEach(execution => {
+        executionsMap[execution.test_case_id] = execution;
+      });
+
+      // Update the UI with the executions we found
+      setTestExecutions(executionsMap);
+      dispatch({ type: 'UPDATE_STATUSES', payload: executionsMap });
+    } else {
+      // Handle the case where there are no executions - don't try to create them automatically
+      console.log("No executions found");
+      setTestExecutions({});
+    }
+  } catch (error) {
+    console.error("Error loading test executions:", error);
+    toast({
+      title: "Error",
+      description: "Failed to load test executions",
+      variant: "destructive",
+    });
+  } finally {
+    setLoadingExecutions(false);
+  }
+}, [dispatch, toast]);
+
+// Simplified loadInitialData function without circular dependencies
+const loadInitialData = useCallback(async () => {
+  try {
+    console.log("Starting initial data load");
+    setIsLoading(true);
+
+    // Step 1: Load releases
+    const releasesResponse = await getReleases();
+    setReleases(releasesResponse || []);
+    console.log(`Loaded ${releasesResponse?.length || 0} releases`);
+
+    // If we have releases, select the first one
+    if (releasesResponse && releasesResponse.length > 0) {
+      const firstReleaseId = releasesResponse[0].id;
+      setSelectedRelease(firstReleaseId);
+
+      // Step 2: Load test runs for this release
+      const testRunsResponse = await getTestRunsByReleaseId(firstReleaseId);
+      setTestRuns(testRunsResponse || []);
+      console.log(`Loaded ${testRunsResponse?.length || 0} test runs`);
+
+      // If we have test runs, select the first one
+      if (testRunsResponse && testRunsResponse.length > 0) {
+        setSelectedTestRun(testRunsResponse[0].id);
+      }
+    }
+
+    // Step 3: Load test cases (simplified, don't depend on state)
+    console.log("Loading test cases");
+    const query = supabase
+      .from("test_cases")
+      .select("*, features(name)")
+      .eq("test_type", "manual") // Start with manual test cases
+      .limit(PAGE_SIZE)
+      .order("created_at", { ascending: false });
+
+    const { data: testCases, error } = await query;
+
+    if (error) throw error;
+
+    const processedCases = (testCases || []).map(testCase => ({
+      id: testCase.id,
+      title: testCase.title || "Untitled Test Case",
+      feature: testCase.features?.name || "Unknown Feature",
+      feature_id: testCase.feature_id,
+      priority: testCase.priority || "medium",
+      status: "not_executed",
+      assignedTo: "",
+      lastExecuted: null,
+      description: testCase.description || "",
+      test_type: testCase.test_type || "manual",
+      script: testCase.test_type === "automated"
+        ? `${(testCase.title || "untitled").toLowerCase().replace(/\s+/g, "_")}.py`
+        : null,
+    }));
+
+    // Update test case state
+    dispatch({
+      type: 'FETCH_SUCCESS',
+      payload: {
+        manual: processedCases,
+        automated: []
+      }
+    });
+
+    console.log(`Loaded ${processedCases.length} test cases`);
+
+    // Loading is now complete
+    setIsLoading(false);
+  } catch (error) {
+    console.error("Error in loadInitialData:", error);
+    toast({
+      title: "Error Loading Data",
+      description: String(error),
+      variant: "destructive",
+    });
+
+    // Even on error, stop loading
+    setIsLoading(false);
+  }
+}, [toast, dispatch]);
+
+// FIXED: Reload test cases when tab or search changes - with debounce
+useEffect(() => {
+  if (isLoading) return;
+
+  const debounceTimer = setTimeout(() => {
+    setLoadExecutionsAfterCases(true);
+    loadTestCases(true); // Reset pagination
+  }, 300); // Add a small debounce to prevent rapid consecutive calls
+
+  return () => clearTimeout(debounceTimer);
+}, [activeTab, searchQuery, isLoading]);
+// Removed loadTestCases from dependencies to break cycle
+
+// FIXED: Apply test result filtering - prevent loop
+useEffect(() => {
+  // Guard condition to prevent unnecessary processing
+  if (Object.keys(testExecutions).length === 0 || isLoading) return;
+
+  // Track if we're changing filtering to avoid double-loading
+  const isChangingFilters = filters.result !== 'all';
+
+  if (isChangingFilters) {
+    // Use the FILTER_BY_RESULT action with proper payload
+    dispatch({
+      type: 'FILTER_BY_RESULT',
+      payload: {
+        status: filters.result,
+        executions: testExecutions
+      }
+    });
+  } else {
+    // When resetting to "all", we reload test cases but explicitly WITHOUT
+    // automatically loading executions (which would cause a loop)
+    setLoadExecutionsAfterCases(false);
+    loadTestCases(true);
+    // Re-enable automatic execution loading for future updates
+    setTimeout(() => setLoadExecutionsAfterCases(true), 100);
+  }
+}, [filters.result, testExecutions, isLoading]);
+// Removed loadTestCases from dependencies to break cycle
+
+// FIXED: Consolidated filter changes effect - prevent loop
+useEffect(() => {
+  // Only process if not loading and if filters have actually changed
+  if (isLoading) return;
+
+  // Skip if we're just handling the result filter (which is handled separately)
+  if (filters.result !== 'all') return;
+
+  // Only reload if other filters are active
+  if (filters.featureId !== "all" ||
+      filters.priority !== "all" ||
+      filters.status !== "all" ||
+      filters.tagIds.length > 0) {
+
+    // Temporarily disable execution loading to prevent loops
+    setLoadExecutionsAfterCases(false);
+    loadTestCases(true);
+    // Re-enable execution loading after this operation completes
+    setTimeout(() => setLoadExecutionsAfterCases(true), 100);
+  }
+}, [
+  filters.featureId,
+  filters.priority,
+  filters.status,
+  filters.tagIds,
+  isLoading,
+]);
+// Removed loadTestCases, activeTab, searchQuery from dependencies to break cycle
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
@@ -529,7 +715,7 @@ const TestExecutionPage = () => {
     }
   }, [selectedTestRun, loadTestExecutions]);
 
-  // Handle executing a test case
+  // Fix the execute step button handler to prevent null reference errors
   const handleExecuteTest = async (testCase) => {
     if (!selectedTestRun) {
       toast({
@@ -607,12 +793,80 @@ const TestExecutionPage = () => {
     }
   }, [testCasesState.loading, hasMore, loadTestCases]);
 
+  // Apply test result filtering when that filter changes - Fixed
+  useEffect(() => {
+    // Guard condition to prevent unnecessary processing
+    if (Object.keys(testExecutions).length === 0) return;
+
+    if (filters.result !== 'all' && !isLoading) {
+      // Use the FILTER_BY_RESULT action with proper payload
+      dispatch({
+        type: 'FILTER_BY_RESULT',
+        payload: {
+          status: filters.result,
+          executions: testExecutions
+        }
+      });
+    } else if (filters.result === 'all' && !isLoading) {
+      // Reset filters by reloading test cases
+      loadTestCases(true);
+    }
+  }, [filters.result, testExecutions, isLoading, loadTestCases]);
+
+  // Reload test cases when filters change (except result filter which is handled separately)
+  useEffect(() => {
+    // Only process if not loading and if filters have actually changed
+    if (!isLoading &&
+        (filters.featureId !== "all" ||
+         filters.priority !== "all" ||
+         filters.status !== "all" ||
+         filters.tagIds.length > 0)) {
+      loadTestCases(true); // Reset pagination
+    }
+  }, [
+    filters.featureId,
+    filters.priority,
+    filters.status,
+    filters.tagIds,
+    activeTab,
+    searchQuery,
+    isLoading,
+    loadTestCases
+  ]);
+
+  // Return early if there's an error
+  if (testCasesState.error) {
+    return (
+      <TCMSLayout>
+        <TCMSHeader title="Test Execution" onSearch={handleSearch} />
+        <div className="p-6">
+          <ErrorFallback error={testCasesState.error} />
+        </div>
+      </TCMSLayout>
+    );
+  }
+
+  // Return loading state
+  if (isLoading) {
+    return (
+      <TCMSLayout>
+        <TCMSHeader title="Test Execution" onSearch={handleSearch} />
+        <div className="p-6">
+          <div className="text-center py-12">
+            <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-500 border-r-transparent"></div>
+            <p className="mt-4 text-gray-600">Loading test execution data...</p>
+          </div>
+        </div>
+      </TCMSLayout>
+    );
+  }
+
   // Render test cases with optimized loading states
   const renderTestCases = (testType) => {
-    const testCases = testType === 'manual' ? filteredTestCases : filteredTestCases;
-    const isLoading = testCasesState.loading;
+    const testCases = testType === 'manual' ? testCasesState.manual : testCasesState.automated;
 
-    if (isLoading && testCases.length === 0) {
+    // If we're doing initial loading, show the loading state
+    if (isLoading) {
       return (
         <div className="text-center py-8">
           <p className="text-gray-500">Loading test cases...</p>
@@ -620,14 +874,23 @@ const TestExecutionPage = () => {
       );
     }
 
-    if (loadingExecutions && testCases.length === 0) {
+    // If we're specifically loading executions
+    if (loadingExecutions) {
       return (
         <div className="text-center py-8">
           <p className="text-gray-500">Loading test execution data...</p>
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={() => setLoadingExecutions(false)}
+          >
+            Cancel Loading
+          </Button>
         </div>
       );
     }
 
+    // If we have no test cases
     if (testCases.length === 0) {
       return (
         <div className="text-center py-8">
@@ -638,6 +901,7 @@ const TestExecutionPage = () => {
       );
     }
 
+    // Otherwise render the list
     return (
       <>
         {/* Test case list */}
@@ -827,41 +1091,269 @@ const TestExecutionPage = () => {
                     <TabsTrigger value="automated" onClick={() => setActiveTab("automated")}>Automated</TabsTrigger>
                   </TabsList>
                   <TabsContent value="manual">
-                    <TestFilters
-                      filters={filters}
-                      onFilterChange={handleFilterChange}
-                      features={features}
-                      tags={tags}
-                    />
+                    {/* Filters */}
+                    <div className="flex gap-2 mb-4">
+                      {/* Feature Filter */}
+                      <Select
+                        value={filters.featureId}
+                        onValueChange={(value) => handleFilterChange("featureId", value)}
+                      >
+                        <SelectTrigger className="w-[160px] h-10">
+                          <SelectValue placeholder="Feature" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Features</SelectItem>
+                          {features.map(feature => (
+                            <SelectItem key={feature.id} value={feature.id}>
+                              {feature.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      {/* Priority Filter */}
+                      <Select
+                        value={filters.priority}
+                        onValueChange={(value) => handleFilterChange("priority", value)}
+                      >
+                        <SelectTrigger className="w-[140px] h-10">
+                          <SelectValue placeholder="Priority" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Priorities</SelectItem>
+                          <SelectItem value="critical">Critical</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="low">Low</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {/* Status Filter */}
+                      <Select
+                        value={filters.status}
+                        onValueChange={(value) => handleFilterChange("status", value)}
+                      >
+                        <SelectTrigger className="w-[140px] h-10">
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Statuses</SelectItem>
+                          <SelectItem value="draft">Draft</SelectItem>
+                          <SelectItem value="ready">Ready</SelectItem>
+                          <SelectItem value="deprecated">Deprecated</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {/* Test Result Filter */}
+                      <Select
+                        value={filters.result}
+                        onValueChange={(value) => handleFilterChange("result", value)}
+                      >
+                        <SelectTrigger className="w-[140px] h-10">
+                          <SelectValue placeholder="Result" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Results</SelectItem>
+                          <SelectItem value="passed">Passed</SelectItem>
+                          <SelectItem value="failed">Failed</SelectItem>
+                          <SelectItem value="blocked">Blocked</SelectItem>
+                          <SelectItem value="not_executed">Not Executed</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {/* Tags Filter - Multi-select dropdown */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" className="w-[120px] h-10 relative">
+                            Tags
+                            {filters.tagIds.length > 0 && (
+                              <Badge variant="secondary" className="ml-2 h-5 px-1.5">
+                                {filters.tagIds.length}
+                              </Badge>
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-56" align="end">
+                          <DropdownMenuLabel>Filter by Tags</DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          {tags.length > 0 ? (
+                            tags.map(tag => (
+                              <DropdownMenuCheckboxItem
+                                key={tag.id}
+                                checked={filters.tagIds.includes(tag.id)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    handleFilterChange("tagIds", [...filters.tagIds, tag.id]);
+                                  } else {
+                                    handleFilterChange("tagIds", filters.tagIds.filter(id => id !== tag.id));
+                                  }
+                                }}
+                              >
+                                {tag.name}
+                              </DropdownMenuCheckboxItem>
+                            ))
+                          ) : (
+                            <div className="px-2 py-1.5 text-sm text-gray-500">No tags available</div>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
+                      {/* Reset Filters button - only show if filters are active */}
+                      {activeFilterCount > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            handleFilterChange("featureId", "all");
+                            handleFilterChange("priority", "all");
+                            handleFilterChange("tagIds", []);
+                            handleFilterChange("status", "all");
+                            handleFilterChange("result", "all");
+                          }}
+                          className="h-10"
+                        >
+                          Clear Filters
+                          <Badge variant="secondary" className="ml-2">
+                            {activeFilterCount}
+                          </Badge>
+                        </Button>
+                      )}
+                    </div>
                     <ScrollArea className="h-[400px] w-full rounded-md border">
-                      <TestCaseList
-                        testCases={filteredTestCases}
-                        testExecutions={testExecutions}
-                        isLoading={testCasesState.loading}
-                        isLoadingExecutions={loadingExecutions}
-                        hasMore={hasMore}
-                        onLoadMore={handleLoadMore}
-                        onExecuteTest={handleExecuteTest}
-                      />
+                      {renderTestCases('manual')}
                     </ScrollArea>
                   </TabsContent>
                   <TabsContent value="automated">
-                    <TestFilters
-                      filters={filters}
-                      onFilterChange={handleFilterChange}
-                      features={features}
-                      tags={tags}
-                    />
+                    {/* Filters */}
+                    <div className="flex gap-2 mb-4">
+                      {/* Feature Filter */}
+                      <Select
+                        value={filters.featureId}
+                        onValueChange={(value) => handleFilterChange("featureId", value)}
+                      >
+                        <SelectTrigger className="w-[160px] h-10">
+                          <SelectValue placeholder="Feature" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Features</SelectItem>
+                          {features.map(feature => (
+                            <SelectItem key={feature.id} value={feature.id}>
+                              {feature.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      {/* Priority Filter */}
+                      <Select
+                        value={filters.priority}
+                        onValueChange={(value) => handleFilterChange("priority", value)}
+                      >
+                        <SelectTrigger className="w-[140px] h-10">
+                          <SelectValue placeholder="Priority" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Priorities</SelectItem>
+                          <SelectItem value="critical">Critical</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="low">Low</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {/* Status Filter */}
+                      <Select
+                        value={filters.status}
+                        onValueChange={(value) => handleFilterChange("status", value)}
+                      >
+                        <SelectTrigger className="w-[140px] h-10">
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Statuses</SelectItem>
+                          <SelectItem value="draft">Draft</SelectItem>
+                          <SelectItem value="ready">Ready</SelectItem>
+                          <SelectItem value="deprecated">Deprecated</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {/* Test Result Filter */}
+                      <Select
+                        value={filters.result}
+                        onValueChange={(value) => handleFilterChange("result", value)}
+                      >
+                        <SelectTrigger className="w-[140px] h-10">
+                          <SelectValue placeholder="Result" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Results</SelectItem>
+                          <SelectItem value="passed">Passed</SelectItem>
+                          <SelectItem value="failed">Failed</SelectItem>
+                          <SelectItem value="blocked">Blocked</SelectItem>
+                          <SelectItem value="not_executed">Not Executed</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {/* Tags Filter - Multi-select dropdown */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" className="w-[120px] h-10 relative">
+                            Tags
+                            {filters.tagIds.length > 0 && (
+                              <Badge variant="secondary" className="ml-2 h-5 px-1.5">
+                                {filters.tagIds.length}
+                              </Badge>
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-56" align="end">
+                          <DropdownMenuLabel>Filter by Tags</DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          {tags.length > 0 ? (
+                            tags.map(tag => (
+                              <DropdownMenuCheckboxItem
+                                key={tag.id}
+                                checked={filters.tagIds.includes(tag.id)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    handleFilterChange("tagIds", [...filters.tagIds, tag.id]);
+                                  } else {
+                                    handleFilterChange("tagIds", filters.tagIds.filter(id => id !== tag.id));
+                                  }
+                                }}
+                              >
+                                {tag.name}
+                              </DropdownMenuCheckboxItem>
+                            ))
+                          ) : (
+                            <div className="px-2 py-1.5 text-sm text-gray-500">No tags available</div>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
+                      {/* Reset Filters button - only show if filters are active */}
+                      {activeFilterCount > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            handleFilterChange("featureId", "all");
+                            handleFilterChange("priority", "all");
+                            handleFilterChange("tagIds", []);
+                            handleFilterChange("status", "all");
+                            handleFilterChange("result", "all");
+                          }}
+                          className="h-10"
+                        >
+                          Clear Filters
+                          <Badge variant="secondary" className="ml-2">
+                            {activeFilterCount}
+                          </Badge>
+                        </Button>
+                      )}
+                    </div>
                     <ScrollArea className="h-[400px] w-full rounded-md border">
-                      <TestCaseList
-                        testCases={filteredTestCases}
-                        testExecutions={testExecutions}
-                        isLoading={testCasesState.loading}
-                        isLoadingExecutions={loadingExecutions}
-                        hasMore={hasMore}
-                        onLoadMore={handleLoadMore}
-                        onExecuteTest={handleExecuteTest}
-                      />
+                      {renderTestCases('automated')}
                     </ScrollArea>
                   </TabsContent>
                 </Tabs>
@@ -950,31 +1442,6 @@ const TestExecutionPage = () => {
                         }
                       });
                     }
-
-                    // Update allTestCases state to reflect the new status
-                    setAllTestCases(prev => {
-                      const typeKey = selectedTestCase.test_type === "manual" ? "manual" : "automated";
-                      return {
-                        ...prev,
-                        [typeKey]: prev[typeKey].map(tc =>
-                          tc.id === selectedTestCase.id ? { ...tc, status: results.status } : tc
-                        )
-                      };
-                    });
-
-                    // Also update testExecutions to include the new execution
-                    setTestExecutions(prev => ({
-                      ...prev,
-                      [selectedTestCase.id]: {
-                        // Don't spread the execution object directly as it might be undefined
-                        // Instead, create a new object with the properties we know will exist
-                        test_run_id: selectedTestRun || "",
-                        test_case_id: selectedTestCase.id,
-                        status: results.status,
-                        executed_at: new Date().toISOString(),
-                        notes: results.notes || ""
-                      }
-                    }));
 
                     setIsExecutingTest(false);
                     toast({

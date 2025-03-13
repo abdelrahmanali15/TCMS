@@ -129,7 +129,6 @@ const TestStepExecution = ({
     }
   };
 
-  // Update getStatusIcon function to map "pending" to the same icon as "not_executed"
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "passed":
@@ -139,7 +138,6 @@ const TestStepExecution = ({
       case "blocked":
         return <AlertTriangle className="h-5 w-5 text-orange-500" />;
       case "pending":
-      case "not_executed":
       default:
         return <Clock className="h-5 w-5 text-gray-400" />;
     }
@@ -199,12 +197,15 @@ const TestStepExecution = ({
             <h3 className="font-medium text-gray-900">
               Step {currentStep.step_number}
             </h3>
-            <div className="flex items-center gap-2">
-              {getStatusIcon(stepResults[currentStepIndex]?.status || "pending")}
-              <span className="text-sm capitalize">
-                {stepResults[currentStepIndex]?.status || "pending"}
-              </span>
-            </div>
+            {/* Add null check before accessing status property */}
+            {stepResults && stepResults[currentStepIndex] && stepResults[currentStepIndex].status !== "pending" && (
+              <div className="flex items-center gap-2">
+                {getStatusIcon(stepResults[currentStepIndex]?.status || "pending")}
+                <span className="text-sm capitalize">
+                  {stepResults[currentStepIndex]?.status || "pending"}
+                </span>
+              </div>
+            )}
           </div>
           <p className="text-gray-700 mb-4">{currentStep.description}</p>
           <div className="bg-gray-50 p-3 rounded-md mb-4">
