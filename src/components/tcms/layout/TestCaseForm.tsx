@@ -146,7 +146,7 @@ const formReducer = (state, action: FormAction) => {
       };
     case 'RESET_FORM':
       // First log the raw tags data to debug
-      console.log("Raw tags in payload:", action.payload.tags);
+      // console.log("Raw tags in payload:", action.payload.tags);
 
       // Better handling of tag data that could be in different formats
       const tagsFromPayload = action.payload.tags || [];
@@ -164,7 +164,7 @@ const formReducer = (state, action: FormAction) => {
         }).filter(Boolean);
       }
 
-      console.log("Converted tags:", convertedTags);
+      // console.log("Converted tags:", convertedTags);
 
       return {
         formData: { ...initialFormState.formData, ...action.payload },
@@ -253,15 +253,15 @@ const TestCaseForm = ({
   // Reset the form when testCase prop changes
   useEffect(() => {
     if (isOpen && testCase) {
-      console.log("Setting test case in form:", testCase);
+      // console.log("Setting test case in form:", testCase);
 
       // Better debug logging for tags
       if (testCase.tags) {
-        console.log("Raw tags in test case:", JSON.stringify(testCase.tags));
+        // console.log("Raw tags in test case:", JSON.stringify(testCase.tags));
 
         // Log the structure of the first tag if exists
         if (Array.isArray(testCase.tags) && testCase.tags.length > 0) {
-          console.log("First tag structure:", JSON.stringify(testCase.tags[0]));
+          // console.log("First tag structure:", JSON.stringify(testCase.tags[0]));
         }
       } else {
         console.warn("No tags in test case");
