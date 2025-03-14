@@ -67,6 +67,8 @@ const TestExecutionPage = () => {
   const [releases, setReleases] = useState<Array<{ id: string; name: string }>>([]);
   const [testRuns, setTestRuns] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedTestRun, setSelectedTestRun] = useState("");
+  // NEW state for initial data
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
 
   const { toast } = useToast();
 
@@ -140,6 +142,9 @@ const TestExecutionPage = () => {
         description: "Failed to load initial data",
         variant: "destructive",
       });
+    } finally {
+      // Mark initial data as loaded to prevent intermediate flicker
+      setInitialDataLoaded(true);
     }
   }, [toast]);
 
@@ -257,6 +262,15 @@ const TestExecutionPage = () => {
       });
     }
   };
+
+  // Wrap the render in a loading check
+  if (!initialDataLoaded) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-gray-500">Loading data...</div>
+      </div>
+    );
+  }
 
   return (
     <TCMSLayout>
