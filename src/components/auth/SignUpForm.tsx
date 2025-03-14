@@ -75,22 +75,10 @@ export default function SignUpForm() {
 
           <Button
             type="submit"
-            className="w-full h-12 rounded-full bg-black text-white hover:bg-gray-800 text-sm font-medium"
+            className="w-full h-12 rounded-full bg-blue-600 text-white hover:bg-blue-700 text-sm font-medium"
           >
             Create account
           </Button>
-
-
-          <div className="text-xs text-center text-gray-500 mt-6">
-            By creating an account, you agree to our{" "}
-            <Link to="/" className="text-blue-600 hover:underline">
-              Terms of Service
-            </Link>{" "}
-            and{" "}
-            <Link to="/" className="text-blue-600 hover:underline">
-              Privacy Policy
-            </Link>
-          </div>
 
           <div className="text-sm text-center text-gray-600 mt-6">
             Already have an account?{" "}
