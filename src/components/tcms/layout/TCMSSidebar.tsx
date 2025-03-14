@@ -133,7 +133,7 @@ const TCMSSidebar = ({
           onClick={() => setIsCompact(!isCompact)}
         >
           <Menu size={20} />
-          {!isCompact && "Compact Mode"}
+          {!isCompact && ""}
         </Button>
         {defaultBottomItems.map((item) => (
           <Button

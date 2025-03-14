@@ -426,7 +426,7 @@ const TestExecutionPage = () => {
 
         {/* Test Execution Panel */}
         {isExecutingTest && selectedTestCase && (
-          <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/10 z-50 flex items-center justify-center">
             <div className="w-full max-w-2xl">
               <TestStepExecution
                 testCase={selectedTestCase}
