@@ -261,20 +261,20 @@ const TestExecutionPage = () => {
   return (
     <TCMSLayout>
       <TCMSHeader title="Test Execution" onSearch={handleSearch} />
-      <div className="p-6">
-        <React.Suspense fallback={<div>Loading...</div>}>
-          <Card className="bg-white/90 backdrop-blur-sm border border-gray-100 rounded-xl shadow-sm overflow-hidden mb-6">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-xl font-medium text-gray-900">
-                Test Execution
-              </CardTitle>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-500 mr-2">Release:</span>
-                  <Select
-                    value={selectedRelease}
-                    onValueChange={setSelectedRelease}
-                  >
+      <div className="p-6 flex flex-col h-[calc(100vh-64px)]">
+        <React.Suspense fallback={<div className="flex items-center justify-center h-full">Loading...</div>}>
+          <Card className="bg-white/90 backdrop-blur-sm border border-gray-100 rounded-xl shadow-sm overflow-hidden mb-6 flex flex-col flex-grow">
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardTitle className="text-xl font-medium text-gray-900">
+            Test Execution
+          </CardTitle>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500 mr-2">Release:</span>
+          <Select
+            value={selectedRelease}
+            onValueChange={setSelectedRelease}
+          >
                     <SelectTrigger className="w-[250px] h-9">
                       <SelectValue placeholder="Select a release" />
                     </SelectTrigger>
@@ -372,15 +372,15 @@ const TestExecutionPage = () => {
                       features={features}
                       tags={tags}
                     />
-                    <ScrollArea className="h-[400px] w-full rounded-md border">
+                    <ScrollArea className="p-4 pb-12 mb-8 h-[calc(100vh-350px)] w-full rounded-md border border-gray-100 shadow-sm bg-white/60 backdrop-blur-sm">
                       <TestCaseList
-                        testCases={filteredTestCases}
-                        testExecutions={testExecutions}
-                        isLoading={isLoading}
-                        isLoadingExecutions={loadingExecutions}
-                        hasMore={hasMore}
-                        onLoadMore={handleLoadMore}
-                        onExecuteTest={handleExecuteTest}
+                      testCases={filteredTestCases}
+                      testExecutions={testExecutions}
+                      isLoading={isLoading}
+                      isLoadingExecutions={loadingExecutions}
+                      hasMore={hasMore}
+                      onLoadMore={handleLoadMore}
+                      onExecuteTest={handleExecuteTest}
                       />
                     </ScrollArea>
                   </TabsContent>
@@ -391,7 +391,8 @@ const TestExecutionPage = () => {
                       features={features}
                       tags={tags}
                     />
-                    <ScrollArea className="h-[400px] w-full rounded-md border">
+                    {/* <ScrollArea className="h-[400px] w-full rounded-md border"> */}
+                    <ScrollArea className="p-4 pb-12 mb-8 h-[calc(100vh-350px)] w-full rounded-md border border-gray-100 shadow-sm bg-white/60 backdrop-blur-sm">
                       <TestCaseList
                         testCases={filteredTestCases}
                         testExecutions={testExecutions}
@@ -411,7 +412,7 @@ const TestExecutionPage = () => {
 
         {/* Test Execution Panel */}
         {isExecutingTest && selectedTestCase && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/20 z-50 flex items-center justify-center">
             <div className="w-full max-w-2xl">
               <TestStepExecution
                 testCase={selectedTestCase}
