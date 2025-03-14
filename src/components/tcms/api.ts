@@ -1012,3 +1012,31 @@ export const getFeaturesWithCounts = async (): Promise<Array<{id: string, name: 
     return [];
   }
 };
+
+// Add a fallback function to get mock test cases if database query fails
+export const getEmergencyFallbackTestCases = async (type = 'manual') => {
+  console.log("Using emergency fallback test cases");
+  const featureId = "default-feature";
+
+  // Create some fallback test cases to show instead of a perpetual loading state
+  return [
+    {
+      id: `fallback-${type}-1`,
+      title: `Fallback ${type === 'manual' ? 'Manual' : 'Automated'} Test Case 1`,
+      description: "This is a fallback test case when database is unavailable",
+      feature_id: featureId,
+      test_type: type,
+      priority: "medium",
+      status: "draft"
+    },
+    {
+      id: `fallback-${type}-2`,
+      title: `Fallback ${type === 'manual' ? 'Manual' : 'Automated'} Test Case 2`,
+      description: "This is a fallback test case when database is unavailable",
+      feature_id: featureId,
+      test_type: type,
+      priority: "high",
+      status: "draft"
+    }
+  ];
+};
