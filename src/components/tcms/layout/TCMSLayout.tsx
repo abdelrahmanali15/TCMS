@@ -14,8 +14,17 @@ const TCMSLayout = ({ children, title = "Dashboard" }: TCMSLayoutProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [activeItem, setActiveItem] = useState("Dashboard");
-  // New state for controlling sidebar compact mode
-  const [isSidebarCompact, setIsSidebarCompact] = useState(false);
+
+  // Initialize sidebar compact state from localStorage
+  const [isSidebarCompact, setIsSidebarCompact] = useState(() => {
+    const stored = localStorage.getItem("sidebarCompact");
+    return stored === "true";
+  });
+
+  // Save compact state to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem("sidebarCompact", isSidebarCompact.toString());
+  }, [isSidebarCompact]);
 
   // Update activeItem based on current path
   useEffect(() => {
