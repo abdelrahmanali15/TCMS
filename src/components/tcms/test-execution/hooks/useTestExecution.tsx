@@ -279,7 +279,7 @@ export const useTestExecution = (activeTab: string, searchQuery: string) => {
 
       // Use fallback data if database query fails
       try {
-        console.log("Loading fallback test cases");
+        // console.log("Loading fallback test cases");
         const fallbackCases = await getEmergencyFallbackTestCases(activeTab);
 
         if (activeTab === 'manual') {

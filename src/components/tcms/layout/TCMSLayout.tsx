@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import TCMSSidebar from "./TCMSSidebar";
 import { useAuth } from "../../../../supabase/auth";
 import { LoadingScreen } from "@/components/ui/loading-spinner";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 interface TCMSLayoutProps {
   children: React.ReactNode;
@@ -12,7 +12,28 @@ interface TCMSLayoutProps {
 const TCMSLayout = ({ children, title = "Dashboard" }: TCMSLayoutProps) => {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [activeItem, setActiveItem] = useState("Dashboard");
+
+  // Update activeItem based on current path
+  useEffect(() => {
+    const path = location.pathname;
+    if (path.includes("/projects")) {
+      setActiveItem("Projects");
+    } else if (path.includes("/test-cases")) {
+      setActiveItem("Test Cases");
+    } else if (path.includes("/test-execution")) {
+      setActiveItem("Test Execution");
+    } else if (path.includes("/bugs")) {
+      setActiveItem("Bugs");
+    } else if (path.includes("/reports")) {
+      setActiveItem("Reports");
+    } else if (path.includes("/settings")) {
+      setActiveItem("Settings");
+    } else {
+      setActiveItem("Dashboard");
+    }
+  }, [location.pathname]);
 
   const handleItemClick = (label: string) => {
     setActiveItem(label);

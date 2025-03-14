@@ -112,7 +112,7 @@ const TestExecutionPage = () => {
   // Load initial data - releases and test runs
   const loadInitialData = useCallback(async () => {
     try {
-      console.log("Loading initial data...");
+      // console.log("Loading initial data...");
 
       // Load releases
       const releasesResponse = await getReleases();
@@ -132,7 +132,7 @@ const TestExecutionPage = () => {
         }
       }
 
-      console.log("Initial data loaded, releases:", releasesResponse.length);
+      // console.log("Initial data loaded, releases:", releasesResponse.length);
 
       // We'll let the effect handle initial test case loading
     } catch (error) {
@@ -154,7 +154,7 @@ const TestExecutionPage = () => {
 
   // Load test cases when tab or search changes - ensure we only load once initial state is ready
   useEffect(() => {
-    console.log("Tab/search changed, loading test cases:", { activeTab, debouncedSearch, isLoading });
+    // console.log("Tab/search changed, loading test cases:", { activeTab, debouncedSearch, isLoading });
     // Always load test cases when tab or search changes, regardless of loading state
     loadTestCases(true);
   }, [activeTab, debouncedSearch, loadTestCases]);
