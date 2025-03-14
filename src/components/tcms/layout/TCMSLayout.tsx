@@ -14,6 +14,8 @@ const TCMSLayout = ({ children, title = "Dashboard" }: TCMSLayoutProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [activeItem, setActiveItem] = useState("Dashboard");
+  // New state for controlling sidebar compact mode
+  const [isSidebarCompact, setIsSidebarCompact] = useState(false);
 
   // Update activeItem based on current path
   useEffect(() => {
@@ -71,8 +73,15 @@ const TCMSLayout = ({ children, title = "Dashboard" }: TCMSLayoutProps) => {
 
   return (
     <div className="min-h-screen bg-[#f5f5f7] flex">
-      <TCMSSidebar activeItem={activeItem} onItemClick={handleItemClick} />
-      <div className="flex-1 overflow-auto pt-16 ml-[280px]">{children}</div>
+      <TCMSSidebar
+        activeItem={activeItem}
+        onItemClick={handleItemClick}
+        isCompact={isSidebarCompact}
+        setIsCompact={setIsSidebarCompact}
+      />
+      <div className={`flex-1 overflow-auto pt-16 ${isSidebarCompact ? "ml-20" : "ml-[280px]"}`}>
+        {children}
+      </div>
     </div>
   );
 };
