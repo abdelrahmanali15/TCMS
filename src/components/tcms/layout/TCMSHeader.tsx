@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Bell, Search, Settings, User, LogOut } from "lucide-react";
+import { Search, Settings, User, LogOut } from "lucide-react"; // Removed Bell import
 import { Link } from "react-router-dom";
 import { useAuth } from "../../../../supabase/auth";
 
@@ -37,16 +37,6 @@ const TCMSHeader = ({ title = "Dashboard", onSearch }: TCMSHeaderProps) => {
       </div>
 
       <div className="flex items-center gap-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative rounded-full h-9 w-9 bg-gray-100 hover:bg-gray-200 transition-colors"
-        >
-          <Bell className="h-4 w-4 text-gray-700" />
-          <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[10px] rounded-full h-4 w-4 flex items-center justify-center font-medium border border-white">
-            3
-          </span>
-        </Button>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
