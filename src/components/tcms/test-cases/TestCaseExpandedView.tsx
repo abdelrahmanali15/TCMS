@@ -331,11 +331,15 @@ const TestCaseExpandedView = () => {
                         </div>
                         <div className="mb-4">
                           <h4 className="text-sm font-medium text-gray-500 mb-1">Action:</h4>
-                          <p className="text-gray-800 whitespace-pre-wrap">{step.description}</p>
+                          <div className="text-gray-800 whitespace-pre-line border border-gray-100 rounded-md p-3 bg-gray-50">
+                            {step.description}
+                          </div>
                         </div>
                         <div>
                           <h4 className="text-sm font-medium text-gray-500 mb-1">Expected Result:</h4>
-                          <p className="text-gray-800 whitespace-pre-wrap">{step.expected_result}</p>
+                          <div className="text-gray-800 whitespace-pre-line border border-gray-100 rounded-md p-3 bg-gray-50">
+                            {step.expected_result}
+                          </div>
                         </div>
                       </div>
                     ))}

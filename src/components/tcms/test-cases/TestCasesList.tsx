@@ -424,7 +424,7 @@ const TestCasesList = ({
                       {getTypeBadge(testCase.test_type)}
                     </div>
                   </div>
-                  <p className="text-sm text-gray-500 mb-3">
+                  <p className="text-sm text-gray-500 mb-3 line-clamp-2">
                     {testCase.description}
                   </p>
                   <div className="flex justify-between items-center">
