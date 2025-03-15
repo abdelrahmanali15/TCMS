@@ -466,7 +466,7 @@ const TestCaseExpandedView = () => {
           {/* History Tab - Enhanced version */}
           <TabsContent value="history" className="space-y-6">
             {/* Execution Chart */}
-            <Card>
+            {/* <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Execution Trend</CardTitle>
                 <CardDescription>
@@ -502,7 +502,7 @@ const TestCaseExpandedView = () => {
                   </div>
                 )}
               </CardContent>
-            </Card>
+            </Card> */}
 
             {/* Execution History Table */}
             <Card>
