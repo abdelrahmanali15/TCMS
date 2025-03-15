@@ -13,7 +13,8 @@ import {
   FolderKanban,
   FileCode,
   Users,
-  Menu
+  Menu,
+  Layers
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -35,6 +36,7 @@ interface SidebarProps {
 const defaultNavItems: NavItem[] = [
   { icon: <LayoutDashboard size={20} />, label: "Dashboard" },
   { icon: <FolderKanban size={20} />, label: "Projects" },
+  { icon: <Layers size={20} />, label: "Features" },
   { icon: <ClipboardList size={20} />, label: "Test Cases" },
   { icon: <PlayCircle size={20} />, label: "Test Execution" },
   { icon: <Bug size={20} />, label: "Bugs" },
@@ -86,43 +88,6 @@ const TCMSSidebar = ({
           ))}
         </div>
 
-        <Separator className="my-4 bg-gray-100" />
-
-        <div className="space-y-3">
-          {!isCompact && (
-            <h3 className="text-xs font-medium px-4 py-1 text-gray-500 uppercase tracking-wider">
-              Filters
-            </h3>
-          )}
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-9 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100"
-          >
-            <span className="h-2 w-2 rounded-full bg-green-500"></span>
-            {!isCompact && "Passed"}
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-9 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100"
-          >
-            <span className="h-2 w-2 rounded-full bg-red-500"></span>
-            {!isCompact && "Failed"}
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-9 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100"
-          >
-            <span className="h-2 w-2 rounded-full bg-yellow-500"></span>
-            {!isCompact && "Blocked"}
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-9 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100"
-          >
-            <span className="h-2 w-2 rounded-full bg-gray-400"></span>
-            {!isCompact && "Not Executed"}
-          </Button>
-        </div>
       </ScrollArea>
 
       <div className="p-4 mt-auto border-t border-gray-200 flex flex-col items-center">

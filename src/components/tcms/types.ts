@@ -59,6 +59,9 @@ export interface Feature {
   description?: string;
   created_at: string;
   updated_at: string;
+  owner?: string;          // New field for owner's name
+  owner_email?: string;    // New field for owner's email
+  owner_role?: string;     // Add new field for owner role
 }
 
 export interface TestCase {

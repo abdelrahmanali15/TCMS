@@ -13,6 +13,7 @@ import { LoadingScreen } from "./components/ui/loading-spinner";
 // TCMS Components
 import TCMSPage from "./components/tcms/TCMSPage";
 import ProjectsPage from "./components/tcms/projects/ProjectsPage";
+import FeaturesPage from "./components/tcms/features/FeaturesPage"; // Add the import
 import TestCasesPage from "./components/tcms/test-cases/TestCasesPage";
 import TestExecutionPage from "./components/tcms/test-execution/TestExecutionPage";
 import BugsPage from "./components/tcms/bugs/BugsPage";
@@ -67,6 +68,14 @@ function AppRoutes() {
           element={
             <PrivateRoute>
               <ProjectsPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/tcms/features"
+          element={
+            <PrivateRoute>
+              <FeaturesPage />
             </PrivateRoute>
           }
         />

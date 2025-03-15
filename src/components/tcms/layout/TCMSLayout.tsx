@@ -31,6 +31,8 @@ const TCMSLayout = ({ children, title = "Dashboard" }: TCMSLayoutProps) => {
     const path = location.pathname;
     if (path.includes("/projects")) {
       setActiveItem("Projects");
+    } else if (path.includes("/features")) {
+      setActiveItem("Features");
     } else if (path.includes("/test-cases")) {
       setActiveItem("Test Cases");
     } else if (path.includes("/test-execution")) {
@@ -55,6 +57,9 @@ const TCMSLayout = ({ children, title = "Dashboard" }: TCMSLayoutProps) => {
         break;
       case "Projects":
         navigate("/tcms/projects");
+        break;
+      case "Features":
+        navigate("/tcms/features");
         break;
       case "Test Cases":
         navigate("/tcms/test-cases");

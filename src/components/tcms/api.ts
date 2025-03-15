@@ -102,18 +102,97 @@ export const getFeaturesByModuleId = async (
   return data || [];
 };
 
-// Add the missing getFeatures function
-export const getFeatures = async (): Promise<Array<{id: string, name: string}>> => {
+// Enhanced Features API
+export const getFeatures = async (): Promise<Array<{id: string, name: string, description?: string, owner?: string, owner_email?: string}>> => {
   try {
     const { data, error } = await supabase
       .from("features")
-      .select("id, name")
+      .select("*")
       .order("name");
 
     if (error) throw error;
     return data || [];
   } catch (error) {
     console.error("Error loading features:", error);
+    return [];
+  }
+};
+
+export const getFeatureById = async (id: string): Promise<Feature | null> => {
+  try {
+    const { data, error } = await supabase
+      .from("features")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("Error loading feature:", error);
+    return null;
+  }
+};
+
+export const createFeature = async (feature: Partial<Feature>): Promise<Feature> => {
+  try {
+    const { data, error } = await supabase
+      .from("features")
+      .insert(feature)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("Error creating feature:", error);
+    throw error;
+  }
+};
+
+export const updateFeature = async (id: string, feature: Partial<Feature>): Promise<Feature> => {
+  try {
+    const { data, error } = await supabase
+      .from("features")
+      .update(feature)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("Error updating feature:", error);
+    throw error;
+  }
+};
+
+export const deleteFeature = async (id: string): Promise<void> => {
+  try {
+    const { error } = await supabase
+      .from("features")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error("Error deleting feature:", error);
+    throw error;
+  }
+};
+
+export const getFeaturesByOwner = async (ownerEmail: string): Promise<Feature[]> => {
+  try {
+    const { data, error } = await supabase
+      .from("features")
+      .select("*")
+      .eq("owner_email", ownerEmail)
+      .order("name");
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error(`Error loading features for owner ${ownerEmail}:`, error);
     return [];
   }
 };
@@ -1039,4 +1118,108 @@ export const getEmergencyFallbackTestCases = async (type = 'manual') => {
       status: "draft"
     }
   ];
+};
+
+// User profile API
+export const syncUserProfiles = async (): Promise<void> => {
+  try {
+    // First check if we have profiles table
+    const { error: checkError } = await supabase
+      .from('profiles')
+      .select('id')
+      .limit(1);
+
+    if (checkError) {
+      console.error("Profiles table not available:", checkError);
+      return;
+    }
+
+    // Get all existing auth users
+    const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+
+    if (authError) {
+      console.error("Error fetching auth users:", authError);
+      return;
+    }
+
+    // For each auth user, create a profile if one doesn't exist
+    for (const user of authUsers.users) {
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .single();
+
+      if (!existingProfile) {
+        // Create a new profile
+        await supabase
+          .from('profiles')
+          .insert({
+            id: user.id,
+            email: user.email,
+            full_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0],
+            role: user.user_metadata?.role || 'user',
+            avatar_url: user.user_metadata?.avatar_url
+          });
+      }
+    }
+
+    console.log("User profiles synced successfully");
+  } catch (error) {
+    console.error("Error syncing user profiles:", error);
+  }
+};
+
+// Get user profiles with pagination
+export const getUserProfiles = async (page = 0, limit = 10): Promise<any[]> => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .range(page * limit, (page + 1) * limit - 1)
+      .order('full_name');
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching user profiles:", error);
+    return [];
+  }
+};
+
+// Add Profiles API functions
+export interface Profile {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  avatar_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const getAllProfiles = async (): Promise<Profile[]> => {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .order("full_name");
+  if (error) throw error;
+  return data || [];
+};
+
+export const createProfile = async (
+  profile: Omit<Profile, "id" | "created_at" | "updated_at">
+): Promise<Profile> => {
+  const { data, error } = await supabase
+    .from("profiles")
+    .insert([profile])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+};
+
+export const deleteProfile = async (id: string): Promise<void> => {
+  const { error } = await supabase.from("profiles").delete().eq("id", id);
+  if (error) throw error;
 };
