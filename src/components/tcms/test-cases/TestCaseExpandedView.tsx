@@ -5,9 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
-import { ArrowLeft, Edit, Trash2 } from "lucide-react";
-import { getTestCaseWithSteps, getFeatures, deleteTestCase } from "../api";
-import { TestCase } from "../types";
+import { ArrowLeft, Edit, Trash2, User, Calendar, Hash } from "lucide-react";
+import { getTestCaseWithSteps, getFeatures, deleteTestCase, getTestExecutionsHistoryByTestCase } from "../api";
+import { TestCase, TestExecution } from "../types";
 import TestCaseForm from "../layout/TestCaseForm";
 import {
   Tabs,
@@ -25,6 +25,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Import a lightweight chart library
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const TestCaseExpandedView = () => {
   const { id } = useParams<{ id: string }>();
@@ -32,6 +45,8 @@ const TestCaseExpandedView = () => {
   const { toast } = useToast();
   const [testCase, setTestCase] = useState<TestCase | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isExecutionHistoryLoading, setIsExecutionHistoryLoading] = useState(true);
+  const [executionHistory, setExecutionHistory] = useState<TestExecution[]>([]);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [features, setFeatures] = useState<any[]>([]);
@@ -44,12 +59,6 @@ const TestCaseExpandedView = () => {
       try {
         setIsLoading(true);
         const data = await getTestCaseWithSteps(id);
-        // console.log("Fetched test case data:", data);
-
-        // Extra logging for tags
-        if (data.tags) {
-          // console.log("Tags data structure in expanded view:", JSON.stringify(data.tags));
-        }
 
         // Make sure tags is always defined
         if (!data.tags) data.tags = [];
@@ -73,6 +82,65 @@ const TestCaseExpandedView = () => {
 
     loadTestCase();
   }, [id]);
+
+  // New effect to load test execution history
+  useEffect(() => {
+    const loadExecutionHistory = async () => {
+      if (!id) return;
+
+      try {
+        setIsExecutionHistoryLoading(true);
+        const history = await getTestExecutionsHistoryByTestCase(id);
+        setExecutionHistory(history);
+      } catch (error) {
+        console.error("Error loading execution history:", error);
+        // Don't show toast here to avoid too many error messages
+      } finally {
+        setIsExecutionHistoryLoading(false);
+      }
+    };
+
+    // Only load execution history when the history tab is active
+    if (activeTab === "history") {
+      loadExecutionHistory();
+    }
+  }, [id, activeTab]);
+
+  // Function to prepare data for chart
+  const prepareChartData = () => {
+    if (!executionHistory || executionHistory.length === 0) return [];
+
+    // Create a map to count statuses by month
+    const statusByMonth: Record<string, Record<string, number>> = {};
+
+    executionHistory.forEach((execution) => {
+      if (!execution.executed_at) return;
+
+      const date = new Date(execution.executed_at);
+      const month = date.toLocaleString('default', { month: 'short', year: '2-digit' });
+
+      if (!statusByMonth[month]) {
+        statusByMonth[month] = {
+          passed: 0,
+          failed: 0,
+          blocked: 0,
+          skipped: 0,
+          pending: 0
+        };
+      }
+
+      // Increment the count for this status
+      if (execution.status) {
+        statusByMonth[month][execution.status] = (statusByMonth[month][execution.status] || 0) + 1;
+      }
+    });
+
+    // Convert the map to an array for the chart
+    return Object.keys(statusByMonth).map(month => ({
+      month,
+      ...statusByMonth[month]
+    }));
+  };
 
   const handleDelete = async () => {
     if (!id) return;
@@ -128,6 +196,45 @@ const TestCaseExpandedView = () => {
     );
   };
 
+  const getExecutionStatusBadge = (status: string) => {
+    const colors: Record<string, string> = {
+      passed: "bg-green-100 text-green-800",
+      failed: "bg-red-100 text-red-800",
+      blocked: "bg-amber-100 text-amber-800",
+      skipped: "bg-gray-100 text-gray-800",
+      pending: "bg-blue-100 text-blue-800"
+    };
+
+    return (
+      <Badge className={colors[status] || "bg-gray-100 text-gray-800"}>
+        {status.charAt(0).toUpperCase() + status.slice(1)}
+      </Badge>
+    );
+  };
+
+  // Format date for better readability
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) {
+      return 'Not executed';
+    }
+
+    try {
+      const date = new Date(dateString);
+      // Check if date is valid before formatting
+      if (isNaN(date.getTime())) {
+        return 'Invalid date';
+      }
+
+      return new Intl.DateTimeFormat('en-US', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      }).format(date);
+    } catch (error) {
+      console.error("Error formatting date:", error);
+      return 'Date error';
+    }
+  };
+
   if (isLoading) {
     return (
       <TCMSLayout>
@@ -163,6 +270,9 @@ const TestCaseExpandedView = () => {
       </TCMSLayout>
     );
   }
+
+  // Prepare chart data
+  const chartData = prepareChartData();
 
   return (
     <TCMSLayout>
@@ -353,8 +463,48 @@ const TestCaseExpandedView = () => {
             </Card>
           </TabsContent>
 
-          {/* History Tab */}
-          <TabsContent value="history">
+          {/* History Tab - Enhanced version */}
+          <TabsContent value="history" className="space-y-6">
+            {/* Execution Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Execution Trend</CardTitle>
+                <CardDescription>
+                  Execution results across time
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[300px]">
+                {isExecutionHistoryLoading ? (
+                  <div className="flex items-center justify-center h-full">
+                    <Skeleton className="h-full w-full rounded-md" />
+                  </div>
+                ) : chartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={chartData}
+                      margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="month" />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="passed" stackId="a" fill="#10B981" name="Passed" />
+                      <Bar dataKey="failed" stackId="a" fill="#EF4444" name="Failed" />
+                      <Bar dataKey="blocked" stackId="a" fill="#F59E0B" name="Blocked" />
+                      <Bar dataKey="skipped" stackId="a" fill="#9CA3AF" name="Skipped" />
+                      <Bar dataKey="pending" stackId="a" fill="#3B82F6" name="Not Executed" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                    <p>No execution history data available</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Execution History Table */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Execution History</CardTitle>
@@ -363,9 +513,68 @@ const TestCaseExpandedView = () => {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  Execution history not available in this view
-                </div>
+                {isExecutionHistoryLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(3)].map((_, i) => (
+                      <Skeleton key={i} className="h-8 w-full" />
+                    ))}
+                  </div>
+                ) : executionHistory.length > 0 ? (
+                  <ScrollArea className="h-[400px]">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Test Run</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Executed By</TableHead>
+                          <TableHead>Duration</TableHead>
+                          <TableHead>Notes</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {executionHistory.map((execution) => (
+                          <TableRow key={execution.id}>
+                            <TableCell className="font-medium">
+                              {formatDate(execution.executed_at)}
+                            </TableCell>
+                            <TableCell>
+                              {execution.test_run?.name || <span className="text-gray-500">Unknown</span>}
+                            </TableCell>
+                            <TableCell>
+                              {getExecutionStatusBadge(execution.status)}
+                            </TableCell>
+                            <TableCell className="flex items-center">
+                              {execution.executed_by_profile ? (
+                                <>
+                                  <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center mr-2">
+                                    <User className="h-4 w-4 text-gray-600" />
+                                  </div>
+                                  {execution.executed_by_profile.full_name || execution.executed_by_profile.email || 'Unknown'}
+                                </>
+                              ) : (
+                                <span className="text-gray-500">Not assigned</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {execution.duration ? `${execution.duration}s` : '-'}
+                            </TableCell>
+                            <TableCell>
+                              <div className="max-w-[200px] truncate">
+                                {execution.notes || '-'}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    <p>No execution history available for this test case</p>
+                    <p className="text-sm mt-2">This test case hasn't been executed in any test runs yet</p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

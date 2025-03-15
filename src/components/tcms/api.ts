@@ -695,6 +695,88 @@ export const updateTestExecution = async (
   return data;
 };
 
+/**
+ * Gets the execution history for a specific test case
+ */
+export const getTestExecutionsHistoryByTestCase = async (testCaseId: string): Promise<TestExecution[]> => {
+  try {
+    // First, get test executions with test run info, filter out entries with null executed_at dates
+    const { data: executions, error } = await supabase
+      .from("test_executions")
+      .select(`
+        *,
+        test_run:test_runs(id, name, description, status, release_id)
+      `)
+      .eq("test_case_id", testCaseId)
+      // Only include executions that have actually been executed
+      .not("executed_at", "is", null)
+      // Order by execution date, most recent first
+      .order("executed_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Get the pending/unexecuted entries separately for this test case
+    // Don't try to sort by created_at since it doesn't exist in the table
+    const { data: pendingExecutions, error: pendingError } = await supabase
+      .from("test_executions")
+      .select(`
+        *,
+        test_run:test_runs(id, name, description, status, release_id)
+      `)
+      .eq("test_case_id", testCaseId)
+      .is("executed_at", null);
+
+    if (pendingError) {
+      console.warn("Error fetching pending executions:", pendingError);
+    }
+
+    // Combine the executed and pending executions
+    const allExecutions = [...(executions || []), ...(pendingExecutions || [])];
+
+    // Extract unique user IDs
+    const userIds = [...new Set(allExecutions
+      .filter(e => e.executed_by)
+      .map(e => e.executed_by))];
+
+    // Only attempt to get profiles if we have user IDs
+    let profilesMap: Record<string, any> = {};
+
+    if (userIds.length > 0) {
+      try {
+        // Get all profiles that match our user IDs
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, full_name, email, avatar_url")
+          .in("id", userIds);
+
+        // Create a lookup map for quick access
+        if (profiles) {
+          profilesMap = profiles.reduce((map, profile) => {
+            map[profile.id] = profile;
+            return map;
+          }, {} as Record<string, any>);
+        }
+      } catch (profileError) {
+        console.warn("Could not fetch profiles for test executions:", profileError);
+      }
+    }
+
+    // Enhance executions with profile data
+    const executionsWithProfiles = allExecutions.map(execution => {
+      const profile = execution.executed_by ? profilesMap[execution.executed_by] : null;
+      return {
+        ...execution,
+        executed_by_profile: profile || null
+      };
+    });
+
+    return executionsWithProfiles || [];
+  } catch (error) {
+    console.error("Error fetching test case execution history:", error);
+    return [];
+  }
+};
+
 // Bugs API
 export const getBugs = async (): Promise<Bug[]> => {
   const { data, error } = await supabase
